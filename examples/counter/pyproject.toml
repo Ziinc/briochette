@@ -1,0 +1,23 @@
+[project]
+name = "counter"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["briochette"]
+
+[dependency-groups]
+dev = ["pytest", "playwright"]
+
+[tool.uv.sources]
+briochette = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.briochette]
+app = "counter.app:main"
+identifier = "com.example.counter"
+window = { title = "Counter", width = 360, height = 240 }
