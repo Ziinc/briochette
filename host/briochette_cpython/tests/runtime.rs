@@ -87,7 +87,10 @@ fn counter_app() -> tempfile::TempDir {
     std::fs::create_dir(&site).unwrap();
     let repo = repo();
     link(&repo.join("src/briochette"), &site.join("briochette"));
-    link(&repo.join("examples/counter/counter"), &site.join("counter"));
+    link(
+        &repo.join("examples/counter/counter"),
+        &site.join("counter"),
+    );
     dir
 }
 

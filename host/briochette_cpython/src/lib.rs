@@ -89,7 +89,8 @@ fn run(root: &Path, (module, function): (String, String)) {
             // A site dir, so its `.pth` files (editable installs) count too.
             // Strings: the import system skips any other kind of entry.
             let site_packages = root.join("site-packages");
-            py.import("site")?.call_method1("addsitedir", (site_packages.to_string_lossy(),))?;
+            py.import("site")?
+                .call_method1("addsitedir", (site_packages.to_string_lossy(),))?;
             let path = py.import("sys")?.getattr("path")?.cast_into::<PyList>()?;
             path.insert(0, root.to_string_lossy())?;
             py.import(module.as_str())?
