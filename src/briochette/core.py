@@ -5,7 +5,17 @@ import inspect
 import sys
 import threading
 
-__all__ = ["Qt", "QObject", "pyqtSignal", "QTimer", "QThread"]
+__all__ = [
+    "Qt",
+    "QObject",
+    "pyqtSignal",
+    "QTimer",
+    "QThread",
+    "QModelIndex",
+    "QAbstractItemModel",
+    "QAbstractListModel",
+    "QStringListModel",
+]
 
 
 def _app():
@@ -22,6 +32,13 @@ class Qt:
         LeftButton = 1
         RightButton = 2
         MiddleButton = 4
+
+    class ItemDataRole(enum.IntEnum):
+        DisplayRole = 0
+        DecorationRole = 1
+        EditRole = 2
+        ToolTipRole = 3
+        UserRole = 0x0100
 
     class KeyboardModifier(enum.Flag):
         NoModifier = 0
@@ -246,3 +263,135 @@ class QThread(QObject):
             return True
         self._thread.join(None if msecs is None else msecs / 1000)
         return not self._thread.is_alive()
+
+
+class QModelIndex:
+    """A row (and column) of a model; invalid when made without one."""
+
+    def __init__(self, row=-1, column=-1, model=None):
+        self._row, self._column, self._model = row, column, model
+
+    def row(self):
+        return self._row
+
+    def column(self):
+        return self._column
+
+    def model(self):
+        return self._model
+
+    def isValid(self):
+        return self._model is not None and self._row >= 0
+
+    def data(self, role=Qt.ItemDataRole.DisplayRole):
+        return self._model.data(self, role) if self.isValid() else None
+
+    def __eq__(self, other):
+        return isinstance(other, QModelIndex) and (self._row, self._column, self._model) == (
+            other._row,
+            other._column,
+            other._model,
+        )
+
+    def __hash__(self):
+        return hash((self._row, self._column, id(self._model)))
+
+    def __repr__(self):
+        return f"QModelIndex(row={self._row}, column={self._column})"
+
+
+class QAbstractItemModel(QObject):
+    """Rows of data a view shows. Subclasses implement rowCount and data, and
+    bracket changes with begin/end calls so views follow."""
+
+    dataChanged = pyqtSignal(object, object, list)
+    rowsInserted = pyqtSignal(object, int, int)
+    rowsRemoved = pyqtSignal(object, int, int)
+    modelReset = pyqtSignal()
+    layoutChanged = pyqtSignal()
+
+    def rowCount(self, parent=QModelIndex()):
+        raise NotImplementedError
+
+    def columnCount(self, parent=QModelIndex()):
+        return 1
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        raise NotImplementedError
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        return False
+
+    def index(self, row, column=0, parent=QModelIndex()):
+        if 0 <= row < self.rowCount() and 0 <= column < self.columnCount():
+            return QModelIndex(row, column, self)
+        return QModelIndex()
+
+    def beginInsertRows(self, parent, first, last):
+        self._change = (parent, first, last)
+
+    def endInsertRows(self):
+        self.rowsInserted.emit(*self._change)
+
+    def beginRemoveRows(self, parent, first, last):
+        self._change = (parent, first, last)
+
+    def endRemoveRows(self):
+        self.rowsRemoved.emit(*self._change)
+
+    def beginResetModel(self):
+        pass
+
+    def endResetModel(self):
+        self.modelReset.emit()
+
+
+class QAbstractListModel(QAbstractItemModel):
+    pass
+
+
+class QStringListModel(QAbstractListModel):
+    """A list of strings, editable in place."""
+
+    def __init__(self, strings=None, parent=None):
+        super().__init__(parent)
+        self._strings = list(strings or [])
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._strings)
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if index.isValid() and role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            return self._strings[index.row()]
+        return None
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if not index.isValid() or role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+            return False
+        self._strings[index.row()] = value
+        self.dataChanged.emit(index, index, [role])
+        return True
+
+    def insertRows(self, row, count, parent=QModelIndex()):
+        if not 0 <= row <= len(self._strings):
+            return False
+        self.beginInsertRows(parent, row, row + count - 1)
+        self._strings[row:row] = [""] * count
+        self.endInsertRows()
+        return True
+
+    def removeRows(self, row, count, parent=QModelIndex()):
+        if not (0 <= row and row + count <= len(self._strings)):
+            return False
+        self.beginRemoveRows(parent, row, row + count - 1)
+        del self._strings[row : row + count]
+        self.endRemoveRows()
+        return True
+
+    def stringList(self):
+        return list(self._strings)
+
+    def setStringList(self, strings):
+        self.beginResetModel()
+        self._strings = list(strings)
+        self.endResetModel()

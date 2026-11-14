@@ -90,6 +90,33 @@ class QtBot:
                 self._app.flush()
                 return
 
+    def showRows(self, view, start, end):
+        """Scrolls rows `start` to `end` (exclusive) of a list view into
+        sight: the host asks for them, as on screen. (Not in pytest-qt.)"""
+        window, node = self._node(view, [])
+        attrs = node["a"]
+        self._app._dispatch(
+            {
+                "type": "rows",
+                "window": window,
+                "event": attrs["phx-rows"],
+                "id": attrs["id"],
+                "start": start,
+                "end": end,
+                "visible": [start, end],
+            }
+        )
+        self._app.flush()
+
+    def clickRow(self, view, row):
+        """Clicks row `row` of a list view, showing it first. (Not in pytest-qt.)"""
+        window, node = self._node(view, [])
+        if row not in self.host.rows(window, node["a"]["id"]):
+            self.showRows(view, row, row + 1)
+        attrs = self.host.rows(window, node["a"]["id"])[row]["a"]
+        values = {k.removeprefix("phx-value-"): v for k, v in attrs.items() if k.startswith("phx-value-")}
+        self._send(window, "click", attrs["phx-click"], values)
+
     def _node(self, widget, sub):
         """(window, node) for `widget`'s node, or its descendant at `sub`."""
         self._app.flush()

@@ -40,6 +40,7 @@ class HeadlessHost:
         self._trees = {}
         self._frames = {}
         self._keymaps = {}
+        self._rows = {}
         self._handler = None
         self.calls = []
         self.menus = []
@@ -47,11 +48,21 @@ class HeadlessHost:
 
     def render(self, window, frame):
         self._frames.setdefault(window, []).append(frame)
+        if "rows" in frame:
+            segment = frame["rows"]
+            rows = self._rows.setdefault(window, {}).setdefault(segment["id"], {})
+            rows.update(enumerate(segment["rows"], segment["start"]))
+            return
         if "root" in frame:
             self._trees[window] = frame["root"]
             self._keymaps[window] = frame.get("keymap", [])
         else:
             self._trees[window] = apply(self._trees[window], frame["patch"])
+        # A frame's rows replace every list's: the others are stale.
+        self._rows[window] = {
+            key: dict(enumerate(segment["rows"], segment["start"]))
+            for key, segment in frame.get("lists", {}).items()
+        }
 
     def call(self, message):
         self.calls.append(message)
@@ -78,6 +89,10 @@ class HeadlessHost:
     def keymap(self, window):
         """The key bindings of `window`'s last whole frame."""
         return self._keymaps.get(window, [])
+
+    def rows(self, window, list_id):
+        """The rows the host holds of a list, by index."""
+        return dict(self._rows.get(window, {}).get(list_id, {}))
 
     def frames(self, window):
         """Every frame sent to `window`, in order."""

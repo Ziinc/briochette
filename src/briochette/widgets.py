@@ -8,7 +8,7 @@ import threading
 import weakref
 
 from briochette import _native
-from briochette.core import QObject, pyqtSignal
+from briochette.core import QModelIndex, QObject, Qt, pyqtSignal
 
 __all__ = [
     "QApplication",
@@ -25,6 +25,7 @@ __all__ = [
     "QProgressBar",
     "QMenuBar",
     "QMenu",
+    "QListView",
 ]
 
 _ids = itertools.count()
@@ -55,6 +56,8 @@ class QApplication(QObject):
         self._refs = itertools.count()
         self._awaiting = {}
         self._clipboard = None
+        # List views, whose visible rows go with every frame of their window.
+        self._lists = weakref.WeakSet()
         # The GUI thread: the one that made the app. Its loop runs timers,
         # host events and signals from other threads.
         self._thread = threading.get_ident()
@@ -111,7 +114,10 @@ class QApplication(QObject):
             if window in self._roots:
                 self._render(window, self._frame(window))
         for window, ops in pending.items():
-            self._render(window, {"patch": ops})
+            frame = {"patch": ops}
+            if lists := self._list_rows(window):
+                frame["lists"] = lists
+            self._render(window, frame)
         if self._menus_stale:
             self._menus_stale = False
             menus = self._menu_bar._spec() if self._menu_bar else []
@@ -121,7 +127,25 @@ class QApplication(QObject):
         frame = {"root": self._roots[window]._node()}
         if keymap := self._keymap(window):
             frame["keymap"] = keymap
+        if lists := self._list_rows(window):
+            frame["lists"] = lists
         return frame
+
+    def _list_rows(self, window):
+        """The rows on screen of each list in `window`: the host keeps only
+        what a frame carries, and asks for the rest."""
+        return {
+            view._id: view._segment(*view._visible)
+            for view in self._lists
+            if view._visible and view.winId() == window
+        }
+
+    def _lists_changed(self, window):
+        """Sends `window` a frame, if only to carry its lists' rows."""
+        if window is not None and window not in self._pending:
+            if not self._pending and not self._stale:
+                self._loop.call_soon(self.flush)
+            self._pending[window] = []
 
     def _keymap(self, window):
         root = self._roots.get(window)
@@ -220,6 +244,9 @@ class QApplication(QObject):
             case "click" | "change" | "submit" as kind:
                 if widget := _widgets.get(event.get("event")):
                     widget._on_host(kind, event.get("values") or {})
+            case "rows":
+                if view := _widgets.get(event.get("event")):
+                    view._on_rows(event)
             case "action":
                 for shortcut in list(self._shortcuts):
                     if shortcut._id == event.get("action") and shortcut._enabled:
@@ -461,6 +488,9 @@ class QLayout(QObject):
     def indexOf(self, widget):
         return self._items.index(widget)
 
+    def itemAt(self, index):
+        return _LayoutItem(self._items[index]) if 0 <= index < len(self._items) else None
+
     def count(self):
         return len(self._items)
 
@@ -494,6 +524,14 @@ class QLayout(QObject):
             self._owner._emit(
                 {"op": "splice", "start": len(self._items) - 1, "delete": 0, "c": [widget._node()]}
             )
+
+
+class _LayoutItem:
+    def __init__(self, widget):
+        self._widget = widget
+
+    def widget(self):
+        return self._widget
 
 
 class QBoxLayout(QLayout):
@@ -843,3 +881,94 @@ class QMenu(QWidget):
     def _spec(self):
         items = [{"separator": True} if a is None else a._spec() for a in self._items]
         return {"title": self._title.replace("&", ""), "items": items}
+
+
+class QListView(QWidget):
+    """A model's rows in a virtualized list: the host asks for rows as they
+    scroll into view, so a model may be long."""
+
+    _tag = "list"
+    clicked = pyqtSignal(object)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._model = None
+        self._visible = None
+        self._current = -1
+        _widgets[self._id] = self
+        _app()._lists.add(self)
+
+    def model(self):
+        return self._model
+
+    def setModel(self, model):
+        if self._model is not None:
+            for signal in self._model_signals(self._model):
+                signal.disconnect(self._model_changed)
+        self._model = model
+        for signal in self._model_signals(model):
+            signal.connect(self._model_changed)
+        self._model_changed()
+
+    def currentIndex(self):
+        return self._model.index(self._current) if self._model else QModelIndex()
+
+    def setCurrentIndex(self, index):
+        self._current = index.row()
+        self._rows_changed()
+
+    @staticmethod
+    def _model_signals(model):
+        return (model.dataChanged, model.rowsInserted, model.rowsRemoved, model.modelReset, model.layoutChanged)
+
+    def _count(self):
+        return self._model.rowCount() if self._model else 0
+
+    def _model_changed(self, *args):
+        self._attrs_changed()
+        self._rows_changed()
+
+    def _rows_changed(self):
+        if loc := self._location():
+            _app()._lists_changed(loc[0])
+
+    def _attrs(self):
+        classes = list(dict.fromkeys(["flex-1", *self._classes()]))
+        return {
+            **{k: v for k, v in super()._attrs().items() if k != "class"},
+            "class": " ".join(classes),
+            "id": self._id,
+            "phx-rows": self._id,
+            "rows": str(self._count()),
+        }
+
+    def _row(self, row):
+        selected = row == self._current
+        attrs = {
+            "class": "px-2 py-1 bg-muted" if selected else "px-2 py-1",
+            "phx-click": self._id,
+            "phx-value-row": str(row),
+            "role": "option",
+        }
+        if selected:
+            attrs["aria-selected"] = "true"
+        text = self._model.data(self._model.index(row), Qt.ItemDataRole.DisplayRole)
+        return {"t": "div", "a": attrs, "c": [] if text is None else [str(text)]}
+
+    def _segment(self, start, end):
+        end = min(end, self._count())
+        return {"id": self._id, "start": start, "rows": [self._row(i) for i in range(start, end)]}
+
+    def _on_rows(self, event):
+        self._visible = tuple(event.get("visible") or (event["start"], event["end"]))
+        if loc := self._location():
+            app = _app()
+            app.flush()
+            app._render(loc[0], {"rows": self._segment(event["start"], event["end"])})
+
+    def _on_host(self, kind, values):
+        if kind == "click" and self._model and "row" in values:
+            index = self._model.index(int(values["row"]))
+            if index.isValid():
+                self.setCurrentIndex(index)
+                self.clicked.emit(index)
