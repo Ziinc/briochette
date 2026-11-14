@@ -1,0 +1,28 @@
+[project]
+name = "briochette"
+version = "0.1.0"
+description = "Native GPUI apps in Python, with a PyQt6-compatible API"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = []
+
+[project.entry-points.pytest11]
+briochette = "briochette.testing.plugin"
+
+[dependency-groups]
+dev = ["pytest>=8", "counter", "playwright>=1.58,<1.65"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+counter = { workspace = true }
+
+[tool.uv.workspace]
+members = ["examples/counter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "examples/counter/tests"]
+addopts = "--import-mode=importlib"
