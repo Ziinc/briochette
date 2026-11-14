@@ -15,6 +15,13 @@ class Qt:
         RightButton = 2
         MiddleButton = 4
 
+    class Key(enum.IntEnum):
+        Key_Escape = 0x01000000
+        Key_Tab = 0x01000001
+        Key_Backspace = 0x01000003
+        Key_Return = 0x01000004
+        Key_Enter = 0x01000005
+
 
 def _arity(slot):
     """How many positional arguments `slot` accepts, or None for any number."""

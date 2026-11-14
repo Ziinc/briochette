@@ -33,19 +33,48 @@ class QtBot:
 
     def mouseClick(self, widget, button=Qt.MouseButton.LeftButton, modifier=None, pos=None, delay=-1):
         """Clicks `widget`, sending the host's click event for its node."""
+        window, node = self._node(widget, widget._click_path())
+        if button != Qt.MouseButton.LeftButton:
+            return
+        attrs = node["a"]
+        assert "disabled" not in attrs, f"{widget!r} is disabled"
+        assert "phx-click" in attrs, f"{widget!r} does not handle clicks"
+        values = {k.removeprefix("phx-value-"): v for k, v in attrs.items() if k.startswith("phx-value-")}
+        if node["t"] == "input" and attrs.get("type") == "checkbox":
+            values["checked"] = "checked" not in attrs
+        self._send(window, "click", attrs["phx-click"], values)
+
+    def keyClicks(self, widget, text, modifier=None, delay=-1):
+        """Types `text` at the end of a text input, as the host reports typing."""
+        window, node = self._node(widget, widget._click_path())
+        attrs = node["a"]
+        assert node["t"] in ("input", "textarea") and "phx-change" in attrs, (
+            f"{widget!r} is not a text input"
+        )
+        assert "disabled" not in attrs, f"{widget!r} is disabled"
+        name = attrs.get("name", "value")
+        self._send(window, "change", attrs["phx-change"], {name: widget.text() + text, "_target": name})
+
+    def keyClick(self, widget, key, modifier=None, delay=-1):
+        """Presses `key` in `widget`: Return or Enter submits a text input's form."""
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            window, form = self._node(widget, [])
+            assert "phx-submit" in form["a"], f"{widget!r} does not handle Enter"
+            self._send(window, "submit", form["a"]["phx-submit"], {"value": widget.text()})
+
+    def _node(self, widget, sub):
+        """(window, node) for `widget`'s node, or its descendant at `sub`."""
         self._app.flush()
         loc = widget._location()
         assert loc, f"{widget!r} is not shown; pass it or its window to qtbot.addWidget"
         window, path = loc
         node = self.host.tree(window)
-        for i in path:
+        for i in path + sub:
             node = node["c"][i]
-        if button != Qt.MouseButton.LeftButton:
-            return
-        attrs = node["a"]
-        assert "phx-click" in attrs, f"{widget!r} does not handle clicks"
-        values = {k.removeprefix("phx-value-"): v for k, v in attrs.items() if k.startswith("phx-value-")}
-        self._app._dispatch({"type": "click", "window": window, "event": attrs["phx-click"], "values": values})
+        return window, node
+
+    def _send(self, window, kind, event, values):
+        self._app._dispatch({"type": kind, "window": window, "event": event, "values": values})
         self._app.flush()
 
     def _close_all(self):
