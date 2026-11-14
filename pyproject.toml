@@ -11,7 +11,7 @@ dependencies = []
 briochette = "briochette.testing.plugin"
 
 [dependency-groups]
-dev = ["pytest>=8", "counter"]
+dev = ["pytest>=8", "counter", "playwright>=1.58,<1.65"]
 
 [build-system]
 requires = ["uv_build>=0.8,<0.12"]

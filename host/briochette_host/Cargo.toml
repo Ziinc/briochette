@@ -1,0 +1,22 @@
+[package]
+name = "briochette_host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "The levain host for briochette apps: GPUI on Tauri, with CPython"
+
+[features]
+# Serves the app's windows to Playwright clients when GPUI_PLAYWRIGHT is set.
+# Test builds only.
+playwright = ["levain/playwright"]
+
+[dependencies]
+briochette_cpython = { path = "../briochette_cpython" }
+levain = { git = "https://github.com/Ziinc/levain", rev = "268f2c3cc21108f5e9a780b8c02d87bcd8de73fb" }
+# `tauri::generate_context!` names the crate; the version is levain's.
+tauri = { version = "2.12", default-features = false }
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }

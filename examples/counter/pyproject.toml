@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 dependencies = ["briochette"]
 
 [dependency-groups]
-dev = ["pytest", "playwright"]
+dev = ["pytest", "playwright>=1.58,<1.65"]
 
 [tool.uv.sources]
 briochette = { workspace = true }
