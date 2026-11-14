@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 members = [
     "briochette",
     "counter",
+    "gallery",
     "todo",
 ]
 
@@ -17,6 +18,7 @@ source = { editable = "." }
 [package.dev-dependencies]
 dev = [
     { name = "counter" },
+    { name = "gallery" },
     { name = "playwright" },
     { name = "pytest" },
     { name = "todo" },
@@ -27,6 +29,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "counter", editable = "examples/counter" },
+    { name = "gallery", editable = "examples/gallery" },
     { name = "playwright", specifier = ">=1.58,<1.65" },
     { name = "pytest", specifier = ">=8" },
     { name = "todo", editable = "examples/todo" },
@@ -45,6 +48,29 @@ wheels = [
 name = "counter"
 version = "0.1.0"
 source = { editable = "examples/counter" }
+dependencies = [
+    { name = "briochette" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "playwright" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "briochette", editable = "." }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "playwright", specifier = ">=1.58,<1.65" },
+    { name = "pytest" },
+]
+
+[[package]]
+name = "gallery"
+version = "0.1.0"
+source = { editable = "examples/gallery" }
 dependencies = [
     { name = "briochette" },
 ]
