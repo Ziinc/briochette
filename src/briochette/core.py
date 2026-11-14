@@ -23,12 +23,40 @@ class Qt:
         RightButton = 2
         MiddleButton = 4
 
-    class Key(enum.IntEnum):
-        Key_Escape = 0x01000000
-        Key_Tab = 0x01000001
-        Key_Backspace = 0x01000003
-        Key_Return = 0x01000004
-        Key_Enter = 0x01000005
+    class KeyboardModifier(enum.Flag):
+        NoModifier = 0
+        ShiftModifier = 0x02000000
+        ControlModifier = 0x04000000
+        AltModifier = 0x08000000
+        MetaModifier = 0x10000000
+
+    Key = enum.IntEnum(
+        "Key",
+        {
+            "Key_Escape": 0x01000000,
+            "Key_Tab": 0x01000001,
+            "Key_Backspace": 0x01000003,
+            "Key_Return": 0x01000004,
+            "Key_Enter": 0x01000005,
+            "Key_Delete": 0x01000007,
+            "Key_Home": 0x01000010,
+            "Key_End": 0x01000011,
+            "Key_Left": 0x01000012,
+            "Key_Up": 0x01000013,
+            "Key_Right": 0x01000014,
+            "Key_Down": 0x01000015,
+            "Key_PageUp": 0x01000016,
+            "Key_PageDown": 0x01000017,
+            "Key_Space": 0x20,
+            "Key_Plus": 0x2B,
+            "Key_Minus": 0x2D,
+            **{f"Key_{d}": 0x30 + d for d in range(10)},
+            **{f"Key_{chr(c)}": c for c in range(ord("A"), ord("Z") + 1)},
+            **{f"Key_F{n}": 0x01000030 + n - 1 for n in range(1, 13)},
+        },
+        module=__name__,
+        qualname="Qt.Key",
+    )
 
 
 def _arity(slot):
@@ -101,13 +129,28 @@ class pyqtSignal:
 
 
 class QObject:
-    """The base of every object that has a parent and signals."""
+    """The base of every object that has a parent and signals.
 
-    def __init__(self, parent=None):
+    Keyword arguments connect signals: ``QAction("Open", triggered=slot)``.
+    """
+
+    def __init__(self, parent=None, **signals):
         self._parent = parent
+        self._owned = []
+        if parent is not None:
+            # As in Qt, a parent owns its children: they live while it does.
+            parent._owned.append(self)
+        for name, slot in signals.items():
+            signal = getattr(self, name, None)
+            if not isinstance(signal, BoundSignal):
+                raise TypeError(f"{type(self).__name__} has no signal {name!r}")
+            signal.connect(slot)
 
     def parent(self):
         return self._parent
+
+    def children(self):
+        return list(self._owned)
 
 
 class QTimer(QObject):

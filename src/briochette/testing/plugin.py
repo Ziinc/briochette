@@ -7,6 +7,7 @@ import time
 import pytest
 
 from briochette.core import Qt
+from briochette.gui import _keys_from
 from briochette.testing import HeadlessHost, app_dir
 from briochette.widgets import QApplication
 
@@ -76,11 +77,18 @@ class QtBot:
         self._send(window, "change", attrs["phx-change"], {name: widget.text() + text, "_target": name})
 
     def keyClick(self, widget, key, modifier=None, delay=-1):
-        """Presses `key` in `widget`: Return or Enter submits a text input's form."""
-        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            window, form = self._node(widget, [])
-            assert "phx-submit" in form["a"], f"{widget!r} does not handle Enter"
-            self._send(window, "submit", form["a"]["phx-submit"], {"value": widget.text()})
+        """Presses `key` with `modifier` in `widget`'s window: Return or Enter
+        submits a text input's form; otherwise the window's keymap decides."""
+        window, node = self._node(widget, [])
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not modifier and "phx-submit" in node["a"]:
+            self._send(window, "submit", node["a"]["phx-submit"], {"value": widget.text()})
+            return
+        keys = _keys_from(key, modifier)
+        for binding in self.host.keymap(window):
+            if binding["keys"] == keys:
+                self._app._dispatch({"type": "action", "window": window, "action": binding["action"]})
+                self._app.flush()
+                return
 
     def _node(self, widget, sub):
         """(window, node) for `widget`'s node, or its descendant at `sub`."""

@@ -23,6 +23,8 @@ __all__ = [
     "QLineEdit",
     "QCheckBox",
     "QProgressBar",
+    "QMenuBar",
+    "QMenu",
 ]
 
 _ids = itertools.count()
@@ -44,6 +46,15 @@ class QApplication(QObject):
         self._windows = itertools.count()
         self._roots = {}
         self._pending = {}
+        # Windows whose whole frame (root and keymap) goes out at the next flush.
+        self._stale = set()
+        self._shortcuts = weakref.WeakSet()
+        self._actions = weakref.WeakValueDictionary()
+        self._menu_bar = None
+        self._menus_stale = False
+        self._refs = itertools.count()
+        self._awaiting = {}
+        self._clipboard = None
         # The GUI thread: the one that made the app. Its loop runs timers,
         # host events and signals from other threads.
         self._thread = threading.get_ident()
@@ -82,11 +93,91 @@ class QApplication(QObject):
             self._loop.run_until_complete(asyncio.sleep(seconds))
         self.flush()
 
+    @staticmethod
+    def clipboard():
+        app = _app()
+        if app._clipboard is None:
+            from briochette.gui import QClipboard
+
+            app._clipboard = QClipboard()
+        return app._clipboard
+
     def flush(self):
         """Sends each window's patches queued since the last flush as one frame."""
         pending, self._pending = self._pending, {}
+        stale, self._stale = self._stale, set()
+        for window in stale:
+            pending.pop(window, None)
+            if window in self._roots:
+                self._render(window, self._frame(window))
         for window, ops in pending.items():
             self._render(window, {"patch": ops})
+        if self._menus_stale:
+            self._menus_stale = False
+            menus = self._menu_bar._spec() if self._menu_bar else []
+            self._call("menu.set", {"menus": menus})
+
+    def _frame(self, window):
+        frame = {"root": self._roots[window]._node()}
+        if keymap := self._keymap(window):
+            frame["keymap"] = keymap
+        return frame
+
+    def _keymap(self, window):
+        root = self._roots.get(window)
+        return [
+            {"keys": s._key._keys(), "action": s._id}
+            for s in sorted(self._shortcuts, key=lambda s: int(s._id[1:]))
+            if s._enabled
+            and not s._key.isEmpty()
+            and isinstance(s._parent, QWidget)
+            and s._parent.window() is root
+        ]
+
+    def _add_shortcut(self, shortcut):
+        self._shortcuts.add(shortcut)
+        self._keymap_changed(shortcut._parent)
+
+    def _keymap_changed(self, widget):
+        if isinstance(widget, QWidget) and (window := widget.window()._window) is not None:
+            self._mark_stale(window)
+
+    def _mark_stale(self, window):
+        if not self._stale and not self._pending:
+            self._loop.call_soon(self.flush)
+        self._stale.add(window)
+
+    def _menus_changed(self):
+        if not self._menus_stale:
+            self._menus_stale = True
+            self._loop.call_soon(self.flush)
+
+    def _call(self, name, args):
+        """A platform call; returns its ref. The reply arrives as an event."""
+        ref = next(self._refs)
+        if self._host is not None and hasattr(self._host, "call"):
+            self._host.call({"call": name, "ref": ref, "args": args})
+        return ref
+
+    def _call_sync(self, name, args, timeout=5):
+        """A platform call, waiting for its reply while handling other events."""
+        if self._host is None:
+            return None
+        ref = self._call(name, args)
+        self._awaiting[ref] = None
+        try:
+            while self._awaiting[ref] is None:
+                try:
+                    event = self._inbox.get(timeout=timeout)
+                except queue.Empty:
+                    raise TimeoutError(f"no reply to {name} within {timeout} s") from None
+                self._dispatch(event)
+            reply = self._awaiting[ref]
+        finally:
+            self._awaiting.pop(ref, None)
+        if reply.get("error"):
+            raise RuntimeError(reply["error"])
+        return reply.get("result")
 
     def _render(self, window, frame):
         if self._host is not None:
@@ -102,14 +193,17 @@ class QApplication(QObject):
     def _open(self, widget):
         window = next(self._windows)
         self._roots[window] = widget
-        self._render(window, {"root": widget._node()})
+        if window != 0:
+            # The host opens window 0 itself, from app.json.
+            self._call("window.open", {"window": window, "title": widget.windowTitle()})
+        self._render(window, self._frame(window))
         return window
 
     def _close(self, window):
         self._pending.pop(window, None)
+        self._stale.discard(window)
         self._roots.pop(window, None)
-        if self._host is not None:
-            self._host.close(window)
+        self._call("window.close", {"window": window})
 
     def _post(self, event_json):
         """Called by the host on its own thread with each event's JSON."""
@@ -126,12 +220,22 @@ class QApplication(QObject):
             case "click" | "change" | "submit" as kind:
                 if widget := _widgets.get(event.get("event")):
                     widget._on_host(kind, event.get("values") or {})
+            case "action":
+                for shortcut in list(self._shortcuts):
+                    if shortcut._id == event.get("action") and shortcut._enabled:
+                        shortcut.activated.emit()
+            case "menu":
+                if action := self._actions.get(event.get("event")):
+                    action.trigger()
+            case "reply":
+                if event.get("ref") in self._awaiting:
+                    self._awaiting[event["ref"]] = event
             case "resync":
                 # The host lost the window's tree: send it whole.
                 window = event.get("window")
-                if root := self._roots.get(window):
+                if window in self._roots:
                     self._pending.pop(window, None)
-                    self._render(window, {"root": root._node()})
+                    self._render(window, self._frame(window))
 
 
 def _app():
@@ -189,6 +293,21 @@ class QWidget(QObject):
 
     def isWindow(self):
         return self._parent is None
+
+    def window(self):
+        """The top-level widget this one is in."""
+        widget = self
+        while isinstance(widget._parent, QWidget):
+            widget = widget._parent
+        return widget
+
+    def setWindowTitle(self, title):
+        self._title = title
+        if self._window is not None:
+            _app()._call("window.set_title", {"window": self._window, "title": title})
+
+    def windowTitle(self):
+        return getattr(self, "_title", "")
 
     def isVisible(self):
         if self.isWindow():
@@ -672,3 +791,55 @@ class QProgressBar(QWidget):
         span = self._max - self._min
         percent = 100 * (self._value - self._min) / span if span else 0
         return [{"t": "div", "a": {"class": f"h-full bg-primary w-[{percent:g}%]"}, "c": []}]
+
+
+class QMenuBar(QWidget):
+    """The app's menu bar. Menus are native and app-wide; phones have none."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._menus = []
+        _app()._menu_bar = self
+        _app()._menus_changed()
+
+    def addMenu(self, title):
+        menu = title if isinstance(title, QMenu) else QMenu(title, self)
+        self._menus.append(menu)
+        _app()._menus_changed()
+        return menu
+
+    def _spec(self):
+        return [menu._spec() for menu in self._menus]
+
+    def _node(self):
+        # Native, not part of the window's tree.
+        return {"t": "div", "a": {"class": "hidden"}, "c": []}
+
+
+class QMenu(QWidget):
+    def __init__(self, title="", parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._items = []
+
+    def title(self):
+        return self._title
+
+    def addAction(self, action, slot=None):
+        from briochette.gui import QAction
+
+        if not isinstance(action, QAction):
+            action = QAction(action, self)
+        if slot is not None:
+            action.triggered.connect(slot)
+        self._items.append(action)
+        _app()._menus_changed()
+        return action
+
+    def addSeparator(self):
+        self._items.append(None)
+        _app()._menus_changed()
+
+    def _spec(self):
+        items = [{"separator": True} if a is None else a._spec() for a in self._items]
+        return {"title": self._title.replace("&", ""), "items": items}

@@ -1,3 +1,4 @@
+from briochette.gui import QKeySequence, QShortcut
 from briochette.widgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton
 
 
@@ -12,10 +13,15 @@ class Counter(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.label)
         layout.addWidget(self.increment)
+        QShortcut(QKeySequence("Ctrl+R"), self, activated=self.reset)
 
     def inc(self):
         self.count += 1
         self.label.setText(f"Count: {self.count}")
+
+    def reset(self):
+        self.count = 0
+        self.label.setText("Count: 0")
 
 
 def main():
