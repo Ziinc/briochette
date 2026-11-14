@@ -2,8 +2,11 @@
 
 import asyncio
 import itertools
+import json
+import queue
 import weakref
 
+from briochette import _native
 from briochette.core import QObject, pyqtSignal
 
 __all__ = ["QApplication", "QWidget", "QLayout", "QVBoxLayout", "QLabel", "QPushButton"]
@@ -23,11 +26,16 @@ class QApplication(QObject):
         if QApplication._instance is not None:
             raise RuntimeError("a QApplication already exists")
         QApplication._instance = self
-        self._host = host
+        self._host = host if host is not None else _native.connect()
         self._windows = itertools.count()
+        self._roots = {}
         self._pending = {}
         self._loop = None
         self._code = 0
+        # Host events arrive on another thread; the loop drains them in order.
+        self._inbox = queue.SimpleQueue()
+        if hasattr(self._host, "set_event_handler"):
+            self._host.set_event_handler(self._post)
 
     @staticmethod
     def instance():
@@ -36,17 +44,20 @@ class QApplication(QObject):
     def exec(self):
         """Runs the event loop until `quit` or `exit`; returns the exit code."""
         self._loop = asyncio.new_event_loop()
+        self._loop.call_soon(self._drain)
         try:
             self._loop.run_forever()
         finally:
+            self.flush()
             self._loop.close()
             self._loop = None
         return self._code
 
     def exit(self, code=0):
+        """Stops `exec`; safe to call from any thread."""
         self._code = code
-        if self._loop:
-            self._loop.stop()
+        if loop := self._loop:
+            loop.call_soon_threadsafe(loop.stop)
 
     def quit(self):
         self.exit(0)
@@ -70,22 +81,38 @@ class QApplication(QObject):
 
     def _open(self, widget):
         window = next(self._windows)
+        self._roots[window] = widget
         self._render(window, {"root": widget._node()})
         return window
 
     def _close(self, window):
         self._pending.pop(window, None)
+        self._roots.pop(window, None)
         if self._host is not None:
             self._host.close(window)
 
+    def _post(self, event_json):
+        """Called by the host on its own thread with each event's JSON."""
+        self._inbox.put(json.loads(event_json))
+        if loop := self._loop:
+            loop.call_soon_threadsafe(self._drain)
+
+    def _drain(self):
+        while not self._inbox.empty():
+            self._dispatch(self._inbox.get_nowait())
+
     def _dispatch(self, event):
         """Handles an event from the host, on the Python thread."""
-        if event.get("type") == "click" and (widget := _widgets.get(event.get("event"))):
-            widget._host_click()
-        if self._loop is None:
-            return
-        if self._pending:
-            self._loop.call_soon(self.flush)
+        match event.get("type"):
+            case "click":
+                if widget := _widgets.get(event.get("event")):
+                    widget._host_click()
+            case "resync":
+                # The host lost the window's tree: send it whole.
+                window = event.get("window")
+                if root := self._roots.get(window):
+                    self._pending.pop(window, None)
+                    self._render(window, {"root": root._node()})
 
 
 def _app():
