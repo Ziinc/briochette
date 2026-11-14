@@ -267,3 +267,18 @@ def test_patched_tree_matches_a_fresh_render(qtbot):
     outer.setSpacing(4)
     outer.addStretch()
     assert tree(qtbot, window) == window._node()
+
+
+def test_remove_widget_splices_it_out(qtbot):
+    a, b = QLabel("a"), QLabel("b")
+    window = shown(qtbot, a, b)
+    window.layout().removeWidget(a)
+    assert last_patch(qtbot, window) == [{"op": "splice", "at": [], "start": 0, "delete": 1, "c": []}]
+    assert a.parent() is None and window.layout().count() == 1
+
+
+def test_delete_later_takes_it_out_of_its_layout(qtbot):
+    a, b = QPushButton("a"), QLabel("b")
+    window = shown(qtbot, a, b)
+    a.deleteLater()
+    assert tree(qtbot, window)["c"] == [{"t": "text", "a": {}, "c": ["b"]}]

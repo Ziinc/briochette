@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 members = [
     "briochette",
     "counter",
+    "todo",
 ]
 
 [[package]]
@@ -18,6 +19,7 @@ dev = [
     { name = "counter" },
     { name = "playwright" },
     { name = "pytest" },
+    { name = "todo" },
 ]
 
 [package.metadata]
@@ -27,6 +29,7 @@ dev = [
     { name = "counter", editable = "examples/counter" },
     { name = "playwright", specifier = ">=1.58,<1.65" },
     { name = "pytest", specifier = ">=8" },
+    { name = "todo", editable = "examples/todo" },
 ]
 
 [[package]]
@@ -199,6 +202,29 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/79/42/bb4641652e58dedeac2ec51abc1f8cae4fee4ec63899a0999016229a0f2a/pytest-9.2.0.tar.gz", hash = "sha256:97c4f3b1f3c7414aa36465e09b8220f1d03627993bd51b1282e193753c80557b", size = 1797555, upload-time = "2026-10-27T21:30:20.728Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/39/1f5d8c8877a0fa327db959c19341d4be61660de1ab6b7391f9eb805bcd67/pytest-9.2.0-py3-none-any.whl", hash = "sha256:07acdcf88ec174f907dc01af70bf52d49b014bbab03faeeade31c96b18c2e588", size = 411776, upload-time = "2026-10-27T21:30:19.131Z" },
+]
+
+[[package]]
+name = "todo"
+version = "0.1.0"
+source = { editable = "examples/todo" }
+dependencies = [
+    { name = "briochette" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "playwright" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "briochette", editable = "." }]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "playwright", specifier = ">=1.58,<1.65" },
+    { name = "pytest" },
 ]
 
 [[package]]

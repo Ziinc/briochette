@@ -93,6 +93,6 @@ jobs:
         working-directory: host
         env:
           PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
-      - run: xvfb-run -a uv run pytest examples/counter/e2e
+      - run: xvfb-run -a uv run pytest examples/counter/e2e examples/todo/e2e
         env:
           BRIOCHETTE_HOST: ${{ github.workspace }}/host/target/debug/briochette_host

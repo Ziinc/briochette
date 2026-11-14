@@ -210,6 +210,14 @@ class QWidget(QObject):
             self._hidden = not visible
             self._refresh()
 
+    def deleteLater(self):
+        """Takes the widget out of its layout and window; Python frees it."""
+        parent = self._parent
+        if isinstance(parent, QWidget) and parent._layout and parent._layout._path_of(self):
+            parent._layout.removeWidget(self)
+        self.close()
+        _widgets.pop(self._id, None)
+
     def close(self):
         if self._window is not None:
             _app()._close(self._window)
@@ -316,6 +324,15 @@ class QLayout(QObject):
         spacer._item_class = "flex-1"
         self._add(spacer)
 
+    def removeWidget(self, widget):
+        if widget not in self._items:
+            return
+        index = self._items.index(widget)
+        if self._owner is not None:
+            self._owner._emit({"op": "splice", "start": index, "delete": 1, "c": []})
+        del self._items[index]
+        widget._parent = None
+
     def indexOf(self, widget):
         return self._items.index(widget)
 
@@ -389,6 +406,14 @@ class QGridLayout(QLayout):
 
     def count(self):
         return len(self._cells)
+
+    def removeWidget(self, widget):
+        for key, w in list(self._cells.items()):
+            if w is widget:
+                del self._cells[key]
+                widget._parent = None
+                if self._owner is not None:
+                    self._owner._refresh()
 
     def _widgets(self):
         return list(self._cells.values())
