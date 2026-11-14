@@ -38,7 +38,9 @@ jobs:
         working-directory: host
         shell: bash
     steps:
+      # Before checkout `host/` does not exist yet.
       - run: git config --global core.autocrlf false
+        working-directory: .
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         id: python
