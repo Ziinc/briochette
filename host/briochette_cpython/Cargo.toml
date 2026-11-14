@@ -1,0 +1,16 @@
+[package]
+name = "briochette_cpython"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Runs a briochette app in embedded CPython, driving levain through its C ABI"
+
+[dependencies]
+levain-abi = { git = "https://github.com/Ziinc/levain", rev = "268f2c3cc21108f5e9a780b8c02d87bcd8de73fb" }
+pyo3 = "0.30"
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
