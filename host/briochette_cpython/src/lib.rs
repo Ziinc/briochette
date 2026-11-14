@@ -86,23 +86,61 @@ fn run(root: &Path, (module, function): (String, String)) {
     });
     Python::attach(|py| {
         let result = (|| -> PyResult<()> {
+            let sys = py.import("sys")?;
+            // The process's arguments, as `QApplication(sys.argv)` reads them.
+            sys.setattr("argv", std::env::args().collect::<Vec<_>>())?;
             // A site dir, so its `.pth` files (editable installs) count too.
             // Strings: the import system skips any other kind of entry.
             let site_packages = root.join("site-packages");
             py.import("site")?
                 .call_method1("addsitedir", (site_packages.to_string_lossy(),))?;
-            let path = py.import("sys")?.getattr("path")?.cast_into::<PyList>()?;
+            let path = sys.getattr("path")?.cast_into::<PyList>()?;
             path.insert(0, root.to_string_lossy())?;
             py.import(module.as_str())?
                 .getattr(function.as_str())?
                 .call0()?;
             Ok(())
         })();
-        if let Err(err) = result {
-            err.print(py);
-            notice(&format!("The app stopped: {err}"));
+        // As a Python program, the app ends when its main function does.
+        let code = match result {
+            Ok(()) => Some(0),
+            Err(err) if err.is_instance_of::<pyo3::exceptions::PySystemExit>(py) => {
+                Some(exit_code(py, &err))
+            }
+            Err(err) => {
+                // Shown in place of the app; the process stays to show it.
+                err.print(py);
+                notice(&format!("The app stopped: {err}"));
+                None
+            }
+        };
+        if let Some(code) = code {
+            call_json(&serde_json::json!({"call": "app.exit", "ref": 0, "args": {"code": code}}));
         }
     });
+}
+
+/// `sys.exit`'s status: an int as is, None as 0, anything else printed and 1.
+fn exit_code(py: Python<'_>, err: &PyErr) -> i64 {
+    let code = err.value(py).getattr("code").ok();
+    match code {
+        Some(code) if code.is_none() => 0,
+        Some(code) => code.extract::<i64>().unwrap_or_else(|_| {
+            let _ = py
+                .import("sys")
+                .and_then(|sys| sys.getattr("stderr"))
+                .and_then(|stderr| stderr.call_method1("write", (format!("{code}\n"),)));
+            1
+        }),
+        None => 1,
+    }
+}
+
+fn call_json(message: &serde_json::Value) {
+    let json = message.to_string();
+    if let Some(api) = HOST.get() {
+        (api.call)(api.ctx, json.as_ptr(), json.len());
+    }
 }
 
 /// Replaces window 0 with `text`, so a failed start is not a blank window.

@@ -66,8 +66,8 @@ class HeadlessHost:
 
     def call(self, message):
         self.calls.append(message)
-        args, result = message.get("args", {}), None
-        match message["call"]:
+        name, args, result, error = message["call"], message.get("args", {}), None, None
+        match name:
             case "clipboard.write":
                 self.clipboard = args["text"]
             case "clipboard.read":
@@ -76,8 +76,15 @@ class HeadlessHost:
                 self.menus = args["menus"]
             case "window.close":
                 self._trees.pop(args["window"], None)
+            case "window.open" | "window.set_title" | "window.set_bounds" | "app.exit":
+                pass
+            case _:
+                error = f"{name}: no platform call `{name}`"
+        reply = {"type": "reply", "ref": message["ref"], "result": result}
+        if error:
+            reply["error"] = error
         if self._handler:
-            self._handler(json.dumps({"type": "reply", "ref": message["ref"], "result": result}))
+            self._handler(json.dumps(reply))
 
     def set_event_handler(self, handler):
         self._handler = handler

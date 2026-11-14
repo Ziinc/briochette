@@ -8,7 +8,7 @@ publish = false
 description = "Runs a briochette app in embedded CPython, driving levain through its C ABI"
 
 [dependencies]
-levain-abi = { git = "https://github.com/Ziinc/levain", rev = "268f2c3cc21108f5e9a780b8c02d87bcd8de73fb" }
+levain-abi = { git = "https://github.com/Ziinc/levain", rev = "53738e5a7cfcc5d6275b2b3c79c31ca81464c5c7" }
 pyo3 = "0.30"
 serde_json = "1"
 

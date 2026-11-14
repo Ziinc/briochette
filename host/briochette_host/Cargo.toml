@@ -7,6 +7,12 @@ repository.workspace = true
 publish = false
 description = "The levain host for briochette apps: GPUI on Tauri, with CPython"
 
+[lib]
+# Desktop links the rlib into the executable; Android loads the cdylib and
+# iOS links the staticlib, as levain's hosts do.
+name = "briochette_host_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
 [features]
 # Serves the app's windows to Playwright clients when GPUI_PLAYWRIGHT is set.
 # Test builds only.
@@ -14,7 +20,7 @@ playwright = ["levain/playwright"]
 
 [dependencies]
 briochette_cpython = { path = "../briochette_cpython" }
-levain = { git = "https://github.com/Ziinc/levain", rev = "268f2c3cc21108f5e9a780b8c02d87bcd8de73fb" }
+levain = { git = "https://github.com/Ziinc/levain", rev = "53738e5a7cfcc5d6275b2b3c79c31ca81464c5c7" }
 # `tauri::generate_context!` names the crate; the version is levain's.
 tauri = { version = "2.12", default-features = false }
 
