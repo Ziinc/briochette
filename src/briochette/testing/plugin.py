@@ -28,8 +28,28 @@ class QtBot:
         self._widgets.append(widget)
 
     def wait(self, ms=0):
-        """Lets queued updates reach the host."""
-        self._app.flush()
+        """Runs the app's loop for `ms`: timers fire and updates reach the host."""
+        self._app.processEvents(ms / 1000)
+
+    def waitUntil(self, callback, timeout=5000):
+        """Runs the loop until `callback` returns True, or stops raising
+        AssertionError when it returns None."""
+        deadline = time.monotonic() + timeout / 1000
+        while True:
+            try:
+                result = callback()
+                if result is None or result:
+                    return
+                failure = f"{callback!r} still returned {result!r}"
+            except AssertionError as e:
+                failure = str(e)
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"waitUntil timed out after {timeout} ms: {failure}")
+            self._app.processEvents(0.005)
+
+    def waitSignal(self, signal, timeout=5000, raising=True):
+        """A context manager: on exit, runs the loop until `signal` is emitted."""
+        return _SignalBlocker(self._app, signal, timeout, raising)
 
     def mouseClick(self, widget, button=Qt.MouseButton.LeftButton, modifier=None, pos=None, delay=-1):
         """Clicks `widget`, sending the host's click event for its node."""
@@ -80,6 +100,31 @@ class QtBot:
     def _close_all(self):
         for widget in self._widgets:
             widget.close()
+
+
+class _SignalBlocker:
+    def __init__(self, app, signal, timeout, raising):
+        self._app, self._signal, self._timeout, self._raising = app, signal, timeout, raising
+        self.signal_triggered = False
+        self.args = None
+
+    def _caught(self, *args):
+        self.signal_triggered, self.args = True, list(args)
+
+    def __enter__(self):
+        self._signal.connect(self._caught)
+        return self
+
+    def __exit__(self, kind, value, traceback):
+        try:
+            if kind is None:
+                deadline = time.monotonic() + self._timeout / 1000
+                while not self.signal_triggered and time.monotonic() < deadline:
+                    self._app.processEvents(0.005)
+                if not self.signal_triggered and self._raising:
+                    raise TimeoutError(f"no signal within {self._timeout} ms")
+        finally:
+            self._signal.disconnect(self._caught)
 
 
 @pytest.fixture(scope="session")

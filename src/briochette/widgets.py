@@ -4,6 +4,7 @@ import asyncio
 import itertools
 import json
 import queue
+import threading
 import weakref
 
 from briochette import _native
@@ -43,7 +44,10 @@ class QApplication(QObject):
         self._windows = itertools.count()
         self._roots = {}
         self._pending = {}
-        self._loop = None
+        # The GUI thread: the one that made the app. Its loop runs timers,
+        # host events and signals from other threads.
+        self._thread = threading.get_ident()
+        self._loop = asyncio.new_event_loop()
         self._code = 0
         # Host events arrive on another thread; the loop drains them in order.
         self._inbox = queue.SimpleQueue()
@@ -56,24 +60,27 @@ class QApplication(QObject):
 
     def exec(self):
         """Runs the event loop until `quit` or `exit`; returns the exit code."""
-        self._loop = asyncio.new_event_loop()
-        self._loop.call_soon(self._drain)
+        self._code = 0
         try:
             self._loop.run_forever()
         finally:
             self.flush()
-            self._loop.close()
-            self._loop = None
         return self._code
 
     def exit(self, code=0):
         """Stops `exec`; safe to call from any thread."""
         self._code = code
-        if loop := self._loop:
-            loop.call_soon_threadsafe(loop.stop)
+        if self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
 
     def quit(self):
         self.exit(0)
+
+    def processEvents(self, seconds=0):
+        """Runs the loop for `seconds` (timers, host events, queued signals)."""
+        if not self._loop.is_running():
+            self._loop.run_until_complete(asyncio.sleep(seconds))
+        self.flush()
 
     def flush(self):
         """Sends each window's patches queued since the last flush as one frame."""
@@ -88,7 +95,7 @@ class QApplication(QObject):
     def _queue(self, window, op):
         first = not self._pending
         self._pending.setdefault(window, []).append(op)
-        if first and self._loop is not None:
+        if first:
             # Setters in one step of the loop go out together.
             self._loop.call_soon(self.flush)
 
@@ -107,8 +114,7 @@ class QApplication(QObject):
     def _post(self, event_json):
         """Called by the host on its own thread with each event's JSON."""
         self._inbox.put(json.loads(event_json))
-        if loop := self._loop:
-            loop.call_soon_threadsafe(self._drain)
+        self._loop.call_soon_threadsafe(self._drain)
 
     def _drain(self):
         while not self._inbox.empty():
