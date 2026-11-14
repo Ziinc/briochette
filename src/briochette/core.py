@@ -15,6 +15,8 @@ __all__ = [
     "QAbstractItemModel",
     "QAbstractListModel",
     "QStringListModel",
+    "pyqtSlot",
+    "pyqtProperty",
 ]
 
 
@@ -143,6 +145,33 @@ class pyqtSignal:
         except KeyError:
             bound = obj.__dict__[self.attr] = BoundSignal()
             return bound
+
+
+def pyqtSlot(*types, name=None, result=None):
+    """Marks a method as a slot. Any callable is a slot here, so it changes nothing."""
+
+    def mark(function):
+        return function
+
+    return mark
+
+
+class pyqtProperty(property):
+    """A property; the type argument is accepted for compatibility."""
+
+    def __init__(self, type=None, fget=None, fset=None, freset=None, fdel=None, doc=None, **kwargs):
+        super().__init__(fget, fset, fdel, doc)
+        self._type = type
+
+    def __call__(self, fget):
+        prop = pyqtProperty(self._type, fget, self.fset, None, self.fdel, self.__doc__)
+        return prop
+
+    def setter(self, fset):
+        return pyqtProperty(self._type, self.fget, fset, None, self.fdel, self.__doc__)
+
+    def deleter(self, fdel):
+        return pyqtProperty(self._type, self.fget, self.fset, None, fdel, self.__doc__)
 
 
 class QObject:
