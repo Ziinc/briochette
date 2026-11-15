@@ -68,3 +68,11 @@ def test_runtimes_are_pinned_official_builds():
     for name, runtime in build.RUNTIMES.items():
         assert runtime.url.startswith("https://www.python.org/ftp/python/3.15.2/"), name
         assert len(runtime.sha256) == 64
+
+
+def test_tauri_config_points_at_an_existing_frontend_dist(tmp_path):
+    name, path = build._tauri_config(COUNTER, tmp_path)
+    config = json.loads(path.read_text())
+    dist = Path(config["build"]["frontendDist"])
+    assert name == "counter" and dist.is_absolute() and (dist / "index.html").is_file()
+    assert config["identifier"] == "com.example.counter"

@@ -132,6 +132,11 @@ def _tauri_config(project, out):
     pyproject, config = _config(project)
     name = pyproject["project"]["name"]
     window = config.get("window", {})
+    # Tauri wants web assets though levain draws with GPUI: an empty page, by
+    # absolute path, as the project it builds may be a generated wrapper.
+    dist = Path(out).resolve() / "dist"
+    dist.mkdir(parents=True, exist_ok=True)
+    (dist / "index.html").write_text("<!doctype html>\n")
     path = Path(out) / "tauri.mobile.json"
     path.write_text(
         json.dumps(
@@ -139,7 +144,7 @@ def _tauri_config(project, out):
                 "productName": window.get("title", name),
                 "version": pyproject["project"].get("version", "0.1.0"),
                 "identifier": config.get("identifier", f"dev.briochette.{name}"),
-                "build": {"frontendDist": "dist"},
+                "build": {"frontendDist": str(dist)},
             }
         )
     )
