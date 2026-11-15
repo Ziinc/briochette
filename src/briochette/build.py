@@ -123,6 +123,16 @@ def archive(app, out):
     return out
 
 
+def write_cargo_env(crate, env):
+    """Sets `env` for every cargo build of `crate` (its ``.cargo/config.toml``):
+    Xcode runs Tauri's iOS build with an environment of its own."""
+    lines = ["[env]"] + [f"{key} = {json.dumps(str(value))}" for key, value in env.items()]
+    path = Path(crate) / ".cargo" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 def _run(cmd, cwd=None, env=None):
     print("+", " ".join(str(c) for c in cmd), flush=True)
     subprocess.run([str(c) for c in cmd], cwd=cwd, env=env, check=True)
@@ -249,6 +259,7 @@ def ios(project, kind, host, out, *, levain_pack="levain-pack", cache=None):
     _run([levain_pack, "ios-crate", "--host-crate", "briochette_host", "--host-lib", "briochette_host_lib",
           "--host-path", host, "--out", out / "ios-crate"], env=env)
     project_dir = out / "ios-crate"
+    write_cargo_env(project_dir, {k: env[k] for k in ("LEVAIN_APP_ARCHIVE", "PYO3_CROSS_LIB_DIR", "PYO3_CROSS_PYTHON_VERSION")})
     _run([levain_pack, "init", "ios", "--project", project_dir, "--config", config,
           "--ldflags", f"-F{framework / spec['slice']}"], env=env)
     apple = project_dir / "gen/apple"

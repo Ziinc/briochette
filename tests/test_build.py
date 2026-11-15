@@ -76,3 +76,11 @@ def test_tauri_config_points_at_an_existing_frontend_dist(tmp_path):
     dist = Path(config["build"]["frontendDist"])
     assert name == "counter" and dist.is_absolute() and (dist / "index.html").is_file()
     assert config["identifier"] == "com.example.counter"
+
+
+def test_cargo_env_config_survives_xcodes_environment(tmp_path):
+    build.write_cargo_env(tmp_path, {"PYO3_CROSS_LIB_DIR": "/x/lib", "LEVAIN_APP_ARCHIVE": 'C:\\a "b".tar.gz'})
+    import tomllib
+
+    config = tomllib.loads((tmp_path / ".cargo" / "config.toml").read_text())
+    assert config["env"] == {"PYO3_CROSS_LIB_DIR": "/x/lib", "LEVAIN_APP_ARCHIVE": 'C:\\a "b".tar.gz'}
