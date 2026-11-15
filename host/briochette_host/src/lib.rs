@@ -23,7 +23,9 @@ impl Runtime for CPython {
 
     fn start(&self, app: App, api: &'static HostApi) -> Result<(), String> {
         let resources = self.resources.lock().unwrap().clone();
-        let home = briochette_cpython::python_home(&app.root, resources.as_deref());
+        let exe = std::env::current_exe().ok();
+        let beside_exe = exe.as_deref().and_then(std::path::Path::parent);
+        let home = briochette_cpython::python_home(&app.root, &[resources.as_deref(), beside_exe]);
         briochette_cpython::start(app.root, home, api)
     }
 }

@@ -34,11 +34,12 @@ pub fn candidates(
 }
 
 /// The Python the app ships, if it ships one: `python/` (holding
-/// `lib/python3.X`) in the app itself (Android, desktop bundles) or in the
-/// bundle's resources (iOS, where CPython's Xcode step puts it).
-pub fn python_home(root: &Path, resources: Option<&Path>) -> Option<PathBuf> {
+/// `lib/python3.X`) in the app itself (Android, desktop bundles), else in the
+/// first of `places` that has one (on iOS CPython's Xcode step puts it at
+/// the bundle's root, beside the executable).
+pub fn python_home(root: &Path, places: &[Option<&Path>]) -> Option<PathBuf> {
     std::iter::once(root)
-        .chain(resources)
+        .chain(places.iter().flatten().copied())
         .map(|dir| dir.join("python"))
         .find(|home| home.join("lib").is_dir())
 }
@@ -93,6 +94,9 @@ pub fn start(root: PathBuf, home: Option<PathBuf>, api: &'static HostApi) -> Res
 fn run(root: &Path, home: Option<PathBuf>, (module, function): (String, String)) {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
+        // In the device log: without its stdlib CPython aborts before Python
+        // can say why.
+        eprintln!("briochette: python home {home:?}");
         if let Some(home) = home {
             // SAFETY: before the interpreter starts, and the only thread
             // that reads the environment for it is this one.
@@ -275,16 +279,26 @@ mod tests {
 
     #[test]
     fn python_home_is_the_apps_or_the_bundles_python() {
-        let (app, bundle) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-        assert_eq!(python_home(app.path(), Some(bundle.path())), None);
+        let (app, bundle, exe) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let places = [Some(bundle.path()), Some(exe.path())];
+        assert_eq!(python_home(app.path(), &places), None);
+        std::fs::create_dir_all(exe.path().join("python/lib")).unwrap();
+        assert_eq!(
+            python_home(app.path(), &places),
+            Some(exe.path().join("python"))
+        );
         std::fs::create_dir_all(bundle.path().join("python/lib")).unwrap();
         assert_eq!(
-            python_home(app.path(), Some(bundle.path())),
+            python_home(app.path(), &places),
             Some(bundle.path().join("python"))
         );
         std::fs::create_dir_all(app.path().join("python/lib")).unwrap();
         assert_eq!(
-            python_home(app.path(), Some(bundle.path())),
+            python_home(app.path(), &[None]),
             Some(app.path().join("python"))
         );
     }
