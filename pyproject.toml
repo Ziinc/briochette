@@ -7,6 +7,9 @@ license = "MIT"
 requires-python = ">=3.13"
 dependencies = []
 
+[project.scripts]
+briochette = "briochette.cli:main"
+
 [project.entry-points.pytest11]
 briochette = "briochette.testing.plugin"
 

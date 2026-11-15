@@ -19,7 +19,7 @@ def main():
 #[test]
 fn sys_exit_becomes_app_exit_and_argv_is_the_process_args() {
     let dir = app(r#"{"app": "exiting:main"}"#, &[("exiting.py", APP)]);
-    briochette_cpython::start(dir.path().to_owned(), host(ABI_VERSION)).unwrap();
+    briochette_cpython::start(dir.path().to_owned(), None, host(ABI_VERSION)).unwrap();
 
     let frame = wait_render(0, |f| f.get("root").is_some());
     let argv: Vec<String> = serde_json::from_str(frame["root"]["c"][0].as_str().unwrap()).unwrap();

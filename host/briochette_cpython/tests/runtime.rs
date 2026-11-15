@@ -28,14 +28,15 @@ fn counter_app() -> tempfile::TempDir {
 #[test]
 fn rejects_another_abi_version() {
     let app = counter_app();
-    let err = briochette_cpython::start(app.path().to_owned(), host(ABI_VERSION - 1)).unwrap_err();
+    let err =
+        briochette_cpython::start(app.path().to_owned(), None, host(ABI_VERSION - 1)).unwrap_err();
     assert!(err.contains("ABI"), "{err}");
 }
 
 #[test]
 fn counter_renders_then_handles_a_click() {
     let app = counter_app();
-    briochette_cpython::start(app.path().to_owned(), host(ABI_VERSION)).unwrap();
+    briochette_cpython::start(app.path().to_owned(), None, host(ABI_VERSION)).unwrap();
 
     let first = wait_render(0, |f| f.get("root").is_some());
     let root = &first["root"];

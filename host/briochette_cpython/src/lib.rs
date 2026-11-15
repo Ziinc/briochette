@@ -33,6 +33,16 @@ pub fn candidates(
         .collect()
 }
 
+/// The Python the app ships, if it ships one: `python/` (holding
+/// `lib/python3.X`) in the app itself (Android, desktop bundles) or in the
+/// bundle's resources (iOS, where CPython's Xcode step puts it).
+pub fn python_home(root: &Path, resources: Option<&Path>) -> Option<PathBuf> {
+    std::iter::once(root)
+        .chain(resources)
+        .map(|dir| dir.join("python"))
+        .find(|home| home.join("lib").is_dir())
+}
+
 /// The first of `candidates` that holds an app (`app.json`).
 pub fn find_app(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates
@@ -60,8 +70,10 @@ pub fn entry_point(root: &Path) -> Result<(String, String), String> {
     }
 }
 
-/// Starts the app at `root` on a new `python` thread. One app per process.
-pub fn start(root: PathBuf, api: &'static HostApi) -> Result<(), String> {
+/// Starts the app at `root` on a new `python` thread, with the Python at
+/// `home` if given (else the one this library was linked against). One app
+/// per process.
+pub fn start(root: PathBuf, home: Option<PathBuf>, api: &'static HostApi) -> Result<(), String> {
     if api.abi_version != ABI_VERSION {
         return Err(format!(
             "the host speaks ABI {} and briochette ABI {ABI_VERSION}; rebuild the app",
@@ -73,14 +85,19 @@ pub fn start(root: PathBuf, api: &'static HostApi) -> Result<(), String> {
         .map_err(|_| "an app is already running in this process")?;
     std::thread::Builder::new()
         .name("python".into())
-        .spawn(move || run(&root, entry))
+        .spawn(move || run(&root, home, entry))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-fn run(root: &Path, (module, function): (String, String)) {
+fn run(root: &Path, home: Option<PathBuf>, (module, function): (String, String)) {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
+        if let Some(home) = home {
+            // SAFETY: before the interpreter starts, and the only thread
+            // that reads the environment for it is this one.
+            unsafe { std::env::set_var("PYTHONHOME", home) };
+        }
         pyo3::append_to_inittab!(_briochette);
         Python::initialize();
     });
@@ -254,6 +271,22 @@ mod tests {
         ];
         assert_eq!(found, expected);
         assert_eq!(candidates(None, None, None), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn python_home_is_the_apps_or_the_bundles_python() {
+        let (app, bundle) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        assert_eq!(python_home(app.path(), Some(bundle.path())), None);
+        std::fs::create_dir_all(bundle.path().join("python/lib")).unwrap();
+        assert_eq!(
+            python_home(app.path(), Some(bundle.path())),
+            Some(bundle.path().join("python"))
+        );
+        std::fs::create_dir_all(app.path().join("python/lib")).unwrap();
+        assert_eq!(
+            python_home(app.path(), Some(bundle.path())),
+            Some(app.path().join("python"))
+        );
     }
 
     #[test]

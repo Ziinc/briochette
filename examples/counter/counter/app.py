@@ -18,6 +18,8 @@ class Counter(QWidget):
     def inc(self):
         self.count += 1
         self.label.setText(f"Count: {self.count}")
+        # The phone smoke tests read this from the device log.
+        print(f"counter: count={self.count}", flush=True)
 
     def reset(self):
         self.count = 0
