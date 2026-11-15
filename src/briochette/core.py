@@ -17,6 +17,9 @@ __all__ = [
     "QStringListModel",
     "pyqtSlot",
     "pyqtProperty",
+    "Signal",
+    "Slot",
+    "Property",
 ]
 
 
@@ -172,6 +175,12 @@ class pyqtProperty(property):
 
     def deleter(self, fdel):
         return pyqtProperty(self._type, self.fget, self.fset, None, fdel, self.__doc__)
+
+
+# PySide6's names for the same things.
+Signal = pyqtSignal
+Slot = pyqtSlot
+Property = pyqtProperty
 
 
 class QObject:

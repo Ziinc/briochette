@@ -1,7 +1,8 @@
-"""An opt-in import hook: ``PyQt6.*`` imports resolve to briochette.
+"""An opt-in import hook: ``PyQt6.*`` and ``PySide6.*`` imports resolve to
+briochette.
 
-Runtime only: briochette publishes no package under that name. Call
-``install()`` before the app imports PyQt6; nothing changes until then.
+Runtime only: briochette publishes no package under those names. Call
+``install()`` before the app imports them; nothing changes until then.
 """
 
 import importlib
@@ -17,7 +18,7 @@ MODULES = {
     "QtGui": "briochette.gui",
     "QtWidgets": "briochette.widgets",
 }
-PACKAGES = ("PyQt6",)
+PACKAGES = ("PyQt6", "PySide6")
 
 
 class _Alias(importlib.abc.Loader):
@@ -53,7 +54,8 @@ _finder = _Finder()
 
 
 def install():
-    """Makes ``PyQt6.QtCore``, ``QtGui`` and ``QtWidgets`` resolve to briochette."""
+    """Makes ``QtCore``, ``QtGui`` and ``QtWidgets`` of PyQt6 and PySide6
+    resolve to briochette."""
     if _finder not in sys.meta_path:
         sys.meta_path.insert(0, _finder)
 

@@ -12,7 +12,7 @@ def hook():
     compat.install()
     yield
     compat.uninstall()
-    for name in [n for n in sys.modules if n == "PyQt6" or n.startswith("PyQt6.")]:
+    for name in [n for n in sys.modules if n.split(".")[0] in ("PyQt6", "PySide6")]:
         del sys.modules[name]
 
 
@@ -106,3 +106,49 @@ def test_the_plans_pyqt6_counter_runs_unchanged(hook, qtbot):
     assert window.label.text() == "Count: 1"
     qtbot.keyClick(window, Qt.Key.Key_R, Qt.KeyboardModifier.ControlModifier)
     assert window.label.text() == "Count: 0"
+
+
+def test_pyside6_modules_map_to_briochette(hook):
+    from PySide6 import QtCore, QtGui, QtWidgets
+
+    assert (QtCore, QtGui, QtWidgets) == (core, gui, widgets)
+
+
+def test_pyside6_signal_slot_property(hook):
+    from PySide6.QtCore import Property, QObject, Signal, Slot
+
+    class Thing(QObject):
+        changed = Signal(int)
+
+        def __init__(self):
+            super().__init__()
+            self._n = 0
+
+        def _get(self):
+            return self._n
+
+        def _set(self, value):
+            self._n = value
+            self.changed.emit(value)
+
+        n = Property(int, _get, _set)
+
+        @Slot(int)
+        def double(self, value):
+            return value * 2
+
+    thing, got = Thing(), []
+    thing.changed.connect(got.append)
+    thing.n = 4
+    assert (thing.n, got, thing.double(3)) == (4, [4], 6)
+
+
+def test_the_plans_counter_runs_under_pyside6(hook, qtbot):
+    from PySide6.QtCore import Qt
+
+    namespace = {}
+    exec(PLAN_COUNTER.replace("PyQt6", "PySide6"), namespace)
+    window = namespace["Counter"]()
+    qtbot.addWidget(window)
+    qtbot.mouseClick(window.increment, Qt.MouseButton.LeftButton)
+    assert window.label.text() == "Count: 1"
