@@ -211,27 +211,46 @@ IOS_TARGETS = {
 
 # Runs after the app's resources are copied: CPython's own Xcode step puts the
 # standard library in the bundle and each binary module in a framework.
-_INSTALL_PYTHON = """\
-    postBuildScripts:
-      - name: Install Python
-        basedOnDependencyAnalysis: false
-        script: |
-          set -e
-          source "$PROJECT_DIR/Python.xcframework/build/utils.sh"
-          install_python Python.xcframework
-"""
+_INSTALL_PYTHON = [
+    "      - name: Install Python",
+    "        basedOnDependencyAnalysis: false",
+    "        script: |",
+    "          set -e",
+    '          source "$PROJECT_DIR/Python.xcframework/build/utils.sh"',
+    "          install_python Python.xcframework",
+]
+_EMBED_PYTHON = ["      - framework: Python.xcframework", "        embed: true"]
+
+
+def _add_to_list(block, key, items):
+    """Appends `items` to the list under `key` (a target key, indented four
+    spaces) in `block`, adding the key if the target has none."""
+    head = f"    {key}:"
+    if head not in block:
+        return block + [head, *items]
+    at = block.index(head) + 1
+    while at < len(block) and block[at].startswith("      "):
+        at += 1
+    return block[:at] + items + block[at:]
 
 
 def patch_project_yml(yml):
-    """Embeds Python.xcframework in the app target and adds CPython's step."""
-    target = "    type: application\n"
-    if target not in yml:
-        raise ValueError("project.yml has no application target")
-    head, rest = yml.split(target, 1)
-    depends = "    dependencies:\n"
-    framework = "      - framework: Python.xcframework\n        embed: true\n"
-    rest = rest.replace(depends, depends + framework, 1) if depends in rest else depends + framework + rest
-    return head + target + _INSTALL_PYTHON + rest
+    """Embeds Python.xcframework in the app target and adds CPython's step.
+    The target is the first under ``targets:`` (``targetTemplates:`` above it
+    has an application type too)."""
+    lines = yml.splitlines()
+    if "targets:" not in lines:
+        raise ValueError("project.yml has no targets")
+    top = lines.index("targets:") + 1
+    if top >= len(lines) or not lines[top].startswith("  ") or lines[top].startswith("   "):
+        raise ValueError("project.yml has no app target")
+    end = top + 1
+    while end < len(lines) and (lines[end].startswith("   ") or not lines[end].strip()):
+        end += 1
+    block = lines[top + 1 : end]
+    block = _add_to_list(block, "dependencies", _EMBED_PYTHON)
+    block = _add_to_list(block, "postBuildScripts", _INSTALL_PYTHON)
+    return "\n".join(lines[: top + 1] + block + lines[end:]) + "\n"
 
 
 def ios(project, kind, host, out, *, levain_pack="levain-pack", cache=None):

@@ -84,3 +84,43 @@ def test_cargo_env_config_survives_xcodes_environment(tmp_path):
 
     config = tomllib.loads((tmp_path / ".cargo" / "config.toml").read_text())
     assert config["env"] == {"PYO3_CROSS_LIB_DIR": "/x/lib", "LEVAIN_APP_ARCHIVE": 'C:\\a "b".tar.gz'}
+
+
+TAURI_PROJECT_YML = """\
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+targets:
+  counter_iOS:
+    type: application
+    platform: iOS
+    dependencies:
+      - framework: libapp.a
+        embed: false
+      - sdk: UIKit.framework
+    preBuildScripts:
+      - script: tauri ios xcode-script
+        name: Build Rust Code
+"""
+
+
+def test_patch_project_yml_patches_the_app_target_not_the_template():
+    import yaml
+
+    project = yaml.safe_load(build.patch_project_yml(TAURI_PROJECT_YML))
+    target = project["targets"]["counter_iOS"]
+    assert {"framework": "Python.xcframework", "embed": True} in target["dependencies"]
+    assert [s["name"] for s in target["postBuildScripts"]] == ["Install Python"]
+    assert "install_python Python.xcframework" in target["postBuildScripts"][0]["script"]
+    assert target["preBuildScripts"][0]["name"] == "Build Rust Code"
+    assert project["targetTemplates"]["app"] == {"type": "application", "sources": [{"path": "Sources"}]}
+
+
+def test_patch_project_yml_appends_to_existing_post_build_scripts():
+    import yaml
+
+    yml = TAURI_PROJECT_YML + "    postBuildScripts:\n      - script: echo hi\n        name: Theirs\n"
+    target = yaml.safe_load(build.patch_project_yml(yml))["targets"]["counter_iOS"]
+    assert [s["name"] for s in target["postBuildScripts"]] == ["Theirs", "Install Python"]
