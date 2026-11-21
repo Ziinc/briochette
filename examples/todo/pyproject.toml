@@ -1,0 +1,23 @@
+[project]
+name = "todo"
+version = "0.1.0"
+requires-python = ">=3.13"
+dependencies = ["briochette"]
+
+[dependency-groups]
+dev = ["pytest", "playwright>=1.58,<1.65"]
+
+[tool.uv.sources]
+briochette = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.briochette]
+app = "todo.app:main"
+identifier = "com.example.todo"
+window = { title = "Todo", width = 420, height = 480 }

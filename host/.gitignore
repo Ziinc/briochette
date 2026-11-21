@@ -1,2 +1,3 @@
 target/
 briochette_host/gen/
+briochette_host/node_modules/

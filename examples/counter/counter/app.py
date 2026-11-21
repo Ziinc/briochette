@@ -1,3 +1,4 @@
+from briochette.gui import QKeySequence, QShortcut
 from briochette.widgets import QApplication, QWidget, QVBoxLayout, QLabel, QPushButton
 
 
@@ -10,12 +11,21 @@ class Counter(QWidget):
         self.increment.setAccessibleName("Increment")
         self.increment.clicked.connect(self.inc)
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
         layout.addWidget(self.label)
         layout.addWidget(self.increment)
+        QShortcut(QKeySequence("Ctrl+R"), self, activated=self.reset)
 
     def inc(self):
         self.count += 1
         self.label.setText(f"Count: {self.count}")
+        # The phone smoke tests read this from the device log.
+        print(f"counter: count={self.count}", flush=True)
+
+    def reset(self):
+        self.count = 0
+        self.label.setText("Count: 0")
 
 
 def main():

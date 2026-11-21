@@ -7,6 +7,7 @@ import time
 import pytest
 
 from briochette.core import Qt
+from briochette.gui import _keys_from
 from briochette.testing import HeadlessHost, app_dir
 from briochette.widgets import QApplication
 
@@ -28,29 +29,137 @@ class QtBot:
         self._widgets.append(widget)
 
     def wait(self, ms=0):
-        """Lets queued updates reach the host."""
-        self._app.flush()
+        """Runs the app's loop for `ms`: timers fire and updates reach the host."""
+        self._app.processEvents(ms / 1000)
+
+    def waitUntil(self, callback, timeout=5000):
+        """Runs the loop until `callback` returns True, or stops raising
+        AssertionError when it returns None."""
+        deadline = time.monotonic() + timeout / 1000
+        while True:
+            try:
+                result = callback()
+                if result is None or result:
+                    return
+                failure = f"{callback!r} still returned {result!r}"
+            except AssertionError as e:
+                failure = str(e)
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"waitUntil timed out after {timeout} ms: {failure}")
+            self._app.processEvents(0.005)
+
+    def waitSignal(self, signal, timeout=5000, raising=True):
+        """A context manager: on exit, runs the loop until `signal` is emitted."""
+        return _SignalBlocker(self._app, signal, timeout, raising)
 
     def mouseClick(self, widget, button=Qt.MouseButton.LeftButton, modifier=None, pos=None, delay=-1):
         """Clicks `widget`, sending the host's click event for its node."""
+        window, node = self._node(widget, widget._click_path())
+        if button != Qt.MouseButton.LeftButton:
+            return
+        attrs = node["a"]
+        assert "disabled" not in attrs, f"{widget!r} is disabled"
+        assert "phx-click" in attrs, f"{widget!r} does not handle clicks"
+        values = {k.removeprefix("phx-value-"): v for k, v in attrs.items() if k.startswith("phx-value-")}
+        if node["t"] == "input" and attrs.get("type") == "checkbox":
+            values["checked"] = "checked" not in attrs
+        self._send(window, "click", attrs["phx-click"], values)
+
+    def keyClicks(self, widget, text, modifier=None, delay=-1):
+        """Types `text` at the end of a text input, as the host reports typing."""
+        window, node = self._node(widget, widget._click_path())
+        attrs = node["a"]
+        assert node["t"] in ("input", "textarea") and "phx-change" in attrs, (
+            f"{widget!r} is not a text input"
+        )
+        assert "disabled" not in attrs, f"{widget!r} is disabled"
+        name = attrs.get("name", "value")
+        self._send(window, "change", attrs["phx-change"], {name: widget.text() + text, "_target": name})
+
+    def keyClick(self, widget, key, modifier=None, delay=-1):
+        """Presses `key` with `modifier` in `widget`'s window: Return or Enter
+        submits a text input's form; otherwise the window's keymap decides."""
+        window, node = self._node(widget, [])
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not modifier and "phx-submit" in node["a"]:
+            self._send(window, "submit", node["a"]["phx-submit"], {"value": widget.text()})
+            return
+        keys = _keys_from(key, modifier)
+        for binding in self.host.keymap(window):
+            if binding["keys"] == keys:
+                self._app._dispatch({"type": "action", "window": window, "action": binding["action"]})
+                self._app.flush()
+                return
+
+    def showRows(self, view, start, end):
+        """Scrolls rows `start` to `end` (exclusive) of a list view into
+        sight: the host asks for them, as on screen. (Not in pytest-qt.)"""
+        window, node = self._node(view, [])
+        attrs = node["a"]
+        self._app._dispatch(
+            {
+                "type": "rows",
+                "window": window,
+                "event": attrs["phx-rows"],
+                "id": attrs["id"],
+                "start": start,
+                "end": end,
+                "visible": [start, end],
+            }
+        )
+        self._app.flush()
+
+    def clickRow(self, view, row):
+        """Clicks row `row` of a list view, showing it first. (Not in pytest-qt.)"""
+        window, node = self._node(view, [])
+        if row not in self.host.rows(window, node["a"]["id"]):
+            self.showRows(view, row, row + 1)
+        attrs = self.host.rows(window, node["a"]["id"])[row]["a"]
+        values = {k.removeprefix("phx-value-"): v for k, v in attrs.items() if k.startswith("phx-value-")}
+        self._send(window, "click", attrs["phx-click"], values)
+
+    def _node(self, widget, sub):
+        """(window, node) for `widget`'s node, or its descendant at `sub`."""
         self._app.flush()
         loc = widget._location()
         assert loc, f"{widget!r} is not shown; pass it or its window to qtbot.addWidget"
         window, path = loc
         node = self.host.tree(window)
-        for i in path:
+        for i in path + sub:
             node = node["c"][i]
-        if button != Qt.MouseButton.LeftButton:
-            return
-        attrs = node["a"]
-        assert "phx-click" in attrs, f"{widget!r} does not handle clicks"
-        values = {k.removeprefix("phx-value-"): v for k, v in attrs.items() if k.startswith("phx-value-")}
-        self._app._dispatch({"type": "click", "window": window, "event": attrs["phx-click"], "values": values})
+        return window, node
+
+    def _send(self, window, kind, event, values):
+        self._app._dispatch({"type": kind, "window": window, "event": event, "values": values})
         self._app.flush()
 
     def _close_all(self):
         for widget in self._widgets:
             widget.close()
+
+
+class _SignalBlocker:
+    def __init__(self, app, signal, timeout, raising):
+        self._app, self._signal, self._timeout, self._raising = app, signal, timeout, raising
+        self.signal_triggered = False
+        self.args = None
+
+    def _caught(self, *args):
+        self.signal_triggered, self.args = True, list(args)
+
+    def __enter__(self):
+        self._signal.connect(self._caught)
+        return self
+
+    def __exit__(self, kind, value, traceback):
+        try:
+            if kind is None:
+                deadline = time.monotonic() + self._timeout / 1000
+                while not self.signal_triggered and time.monotonic() < deadline:
+                    self._app.processEvents(0.005)
+                if not self.signal_triggered and self._raising:
+                    raise TimeoutError(f"no signal within {self._timeout} ms")
+        finally:
+            self._signal.disconnect(self._caught)
 
 
 @pytest.fixture(scope="session")

@@ -1,0 +1,126 @@
+"""Staging an app for a phone: the directory levain embeds in the host."""
+
+import hashlib
+import json
+import tarfile
+from pathlib import Path
+
+import pytest
+
+from briochette import build
+
+ROOT = Path(__file__).parent.parent
+COUNTER = ROOT / "examples" / "counter"
+
+
+def fake_stdlib(tmp_path):
+    lib = tmp_path / "prefix" / "lib" / "python3.15"
+    for name in ["os.py", "json/__init__.py", "lib-dynload/_json.so", "test/test_os.py", "idlelib/x.py", "tkinter/__init__.py"]:
+        (lib / name).parent.mkdir(parents=True, exist_ok=True)
+        (lib / name).write_text("")
+    return lib
+
+
+def test_stage_lays_out_app_json_site_packages_and_python(tmp_path):
+    app = build.stage(COUNTER, tmp_path / "app", stdlib=fake_stdlib(tmp_path))
+    assert json.loads((app / "app.json").read_text()) == {
+        "app": "counter.app:main",
+        "window": {"title": "Counter", "width": 360, "height": 240},
+    }
+    site = app / "site-packages"
+    assert (site / "counter" / "app.py").is_file()
+    assert (site / "briochette" / "widgets.py").is_file()
+    lib = app / "python" / "lib" / "python3.15"
+    assert (lib / "os.py").is_file() and (lib / "lib-dynload" / "_json.so").is_file()
+    assert not any((lib / d).exists() for d in ["test", "idlelib", "tkinter"])
+    assert not list(app.rglob("__pycache__"))
+
+
+def test_stage_without_stdlib_ships_no_python(tmp_path):
+    app = build.stage(COUNTER, tmp_path / "app")
+    assert not (app / "python").exists()
+
+
+def test_archive_has_the_app_at_its_root(tmp_path):
+    app = build.stage(COUNTER, tmp_path / "app")
+    out = build.archive(app, tmp_path / "app.tar.gz")
+    with tarfile.open(out) as tar:
+        names = tar.getnames()
+    assert "app.json" in names and "site-packages/counter/app.py" in names
+
+
+def test_fetch_checks_the_sha256(tmp_path, monkeypatch):
+    payload = tmp_path / "src.tar.gz"
+    with tarfile.open(payload, "w:gz") as tar:
+        (tmp_path / "hello.txt").write_text("hi")
+        tar.add(tmp_path / "hello.txt", "hello.txt")
+    good = hashlib.sha256(payload.read_bytes()).hexdigest()
+    monkeypatch.setattr(build, "_download", lambda url, to: to.write_bytes(payload.read_bytes()))
+
+    root = build.fetch(build.Runtime("https://example.invalid/src.tar.gz", good), tmp_path / "cache")
+    assert (root / "hello.txt").read_text() == "hi"
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        build.fetch(build.Runtime("https://example.invalid/other.tar.gz", "0" * 64), tmp_path / "cache")
+
+
+def test_runtimes_are_pinned_official_builds():
+    for name, runtime in build.RUNTIMES.items():
+        assert runtime.url.startswith("https://www.python.org/ftp/python/3.15.2/"), name
+        assert len(runtime.sha256) == 64
+
+
+def test_tauri_config_points_at_an_existing_frontend_dist(tmp_path):
+    name, path = build._tauri_config(COUNTER, tmp_path)
+    config = json.loads(path.read_text())
+    dist = Path(config["build"]["frontendDist"])
+    assert name == "counter" and dist.is_absolute() and (dist / "index.html").is_file()
+    assert config["identifier"] == "com.example.counter"
+
+
+def test_cargo_env_config_survives_xcodes_environment(tmp_path):
+    build.write_cargo_env(tmp_path, {"PYO3_CROSS_LIB_DIR": "/x/lib", "LEVAIN_APP_ARCHIVE": 'C:\\a "b".tar.gz'})
+    import tomllib
+
+    config = tomllib.loads((tmp_path / ".cargo" / "config.toml").read_text())
+    assert config["env"] == {"PYO3_CROSS_LIB_DIR": "/x/lib", "LEVAIN_APP_ARCHIVE": 'C:\\a "b".tar.gz'}
+
+
+TAURI_PROJECT_YML = """\
+targetTemplates:
+  app:
+    type: application
+    sources:
+      - path: Sources
+targets:
+  counter_iOS:
+    type: application
+    platform: iOS
+    dependencies:
+      - framework: libapp.a
+        embed: false
+      - sdk: UIKit.framework
+    preBuildScripts:
+      - script: tauri ios xcode-script
+        name: Build Rust Code
+"""
+
+
+def test_patch_project_yml_patches_the_app_target_not_the_template():
+    import yaml
+
+    project = yaml.safe_load(build.patch_project_yml(TAURI_PROJECT_YML))
+    target = project["targets"]["counter_iOS"]
+    assert {"framework": "Python.xcframework", "embed": True} in target["dependencies"]
+    assert [s["name"] for s in target["postBuildScripts"]] == ["Install Python"]
+    assert "install_python Python.xcframework" in target["postBuildScripts"][0]["script"]
+    assert target["preBuildScripts"][0]["name"] == "Build Rust Code"
+    assert project["targetTemplates"]["app"] == {"type": "application", "sources": [{"path": "Sources"}]}
+
+
+def test_patch_project_yml_appends_to_existing_post_build_scripts():
+    import yaml
+
+    yml = TAURI_PROJECT_YML + "    postBuildScripts:\n      - script: echo hi\n        name: Theirs\n"
+    target = yaml.safe_load(build.patch_project_yml(yml))["targets"]["counter_iOS"]
+    assert [s["name"] for s in target["postBuildScripts"]] == ["Theirs", "Install Python"]

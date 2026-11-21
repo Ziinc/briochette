@@ -33,3 +33,13 @@ def test_disconnect():
     source.changed.disconnect(got.append)
     source.changed.emit(1)
     assert got == []
+
+
+def test_parent_keeps_its_children_alive():
+    import gc
+    import weakref
+
+    parent = QObject()
+    child = weakref.ref(QObject(parent))
+    gc.collect()
+    assert child() is not None and child() in parent.children()

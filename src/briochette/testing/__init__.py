@@ -33,25 +33,105 @@ def app_dir(project, dest, site_packages=None):
 
 
 class HeadlessHost:
-    """Applies frames as the host does, without drawing; records every frame."""
+    """Applies frames as the host does, without drawing; records every frame
+    and answers platform calls from memory."""
 
     def __init__(self):
         self._trees = {}
         self._frames = {}
+        self._keymaps = {}
+        self._rows = {}
+        self._handler = None
+        self.calls = []
+        self.menus = []
+        self.clipboard = ""
+        self._answers = {}
+        # What `app.paths` reports.
+        self.paths = {
+            "data": "/data/app",
+            "local_data": "/data/app",
+            "config": "/config/app",
+            "cache": "/cache/app",
+            "log": "/log/app",
+            "home": "/home/ana",
+            "documents": "/home/ana/Documents",
+            "downloads": "/home/ana/Downloads",
+            "pictures": "/home/ana/Pictures",
+            "temp": "/tmp",
+            "resources": "/app/resources",
+        }
+
+    def answer(self, call, result):
+        """Answers the next `call` (such as ``dialog.confirm``) with `result`,
+        as if the user had."""
+        self._answers.setdefault(call, []).append(result)
 
     def render(self, window, frame):
         self._frames.setdefault(window, []).append(frame)
+        if "rows" in frame:
+            segment = frame["rows"]
+            rows = self._rows.setdefault(window, {}).setdefault(segment["id"], {})
+            rows.update(enumerate(segment["rows"], segment["start"]))
+            return
         if "root" in frame:
             self._trees[window] = frame["root"]
+            self._keymaps[window] = frame.get("keymap", [])
         else:
             self._trees[window] = apply(self._trees[window], frame["patch"])
+        # A frame's rows replace every list's: the others are stale.
+        self._rows[window] = {
+            key: dict(enumerate(segment["rows"], segment["start"]))
+            for key, segment in frame.get("lists", {}).items()
+        }
 
-    def close(self, window):
-        self._trees.pop(window, None)
+    def call(self, message):
+        self.calls.append(message)
+        name, args, result, error = message["call"], message.get("args", {}), None, None
+        match name:
+            case "clipboard.write":
+                self.clipboard = args["text"]
+            case "clipboard.read":
+                result = self.clipboard
+            case "menu.set":
+                self.menus = args["menus"]
+            case "window.close":
+                self._trees.pop(args["window"], None)
+            case "app.paths":
+                result = dict(self.paths)
+            case "app.info":
+                result = {"os": "linux", "arch": "x86_64", "family": "unix", "locale": "en-US",
+                          "name": "app", "version": "0.1.0", "identifier": "com.example.app"}
+            case "dialog.confirm" | "dialog.message" | "dialog.open" | "dialog.save":
+                answers = self._answers.get(name) or [True if name == "dialog.confirm" else None]
+                result = answers.pop(0)
+            case _ if name.startswith(("window.", "notification.", "tray.", "menu.", "shortcut.")) or name in (
+                "app.exit",
+                "app.open_url",
+                "app.restart",
+            ):
+                pass
+            case _:
+                error = f"{name}: no platform call `{name}`"
+        reply = {"type": "reply", "ref": message["ref"], "result": result}
+        if error:
+            reply["error"] = error
+        if self._handler:
+            self._handler(json.dumps(reply))
+
+    def set_event_handler(self, handler):
+        self._handler = handler
 
     def tree(self, window):
         """The node tree last rendered to `window`."""
         return self._trees.get(window)
+
+    def keymap(self, window):
+        """The key bindings of `window`'s last whole frame."""
+        return self._keymaps.get(window, [])
+
+    def rows(self, window, list_id):
+        """The rows the host holds of a list, by index."""
+        return dict(self._rows.get(window, {}).get(list_id, {}))
 
     def frames(self, window):
         """Every frame sent to `window`, in order."""

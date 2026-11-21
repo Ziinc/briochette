@@ -1,0 +1,120 @@
+name: Mobile
+
+# The counter on an Android emulator and an iOS simulator, on CPython 3.15's
+# official builds: built with `briochette build`, then tapped.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  NDK_VERSION: 27.2.12479018
+  LEVAIN_REV: 1ed1b12206213db787e8fc8cbe0ac7b86ebcbf1c
+
+jobs:
+  android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+          key: android
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - name: NDK and levain-pack
+        run: |
+          sdkmanager --install "ndk;$NDK_VERSION"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          cargo install --git https://github.com/Ziinc/levain --rev "$LEVAIN_REV" levain-pack --locked
+      - name: Build the counter APK
+        run: |
+          uv run briochette build --target android --abi x86_64 \
+            --project examples/counter --host host/briochette_host --out "$RUNNER_TEMP/android"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: counter-apk
+          path: ${{ runner.temp }}/android/counter.apk
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run on the emulator
+        timeout-minutes: 25
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: scripts/android-smoke.sh ${{ runner.temp }}/android/counter.apk com.example.counter android-smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-smoke
+          path: android-smoke
+
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+          key: ios-sim
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: xcodegen and levain-pack
+        run: |
+          command -v xcodegen >/dev/null || brew install xcodegen
+          cargo install --git https://github.com/Ziinc/levain --rev "$LEVAIN_REV" levain-pack --locked
+      - name: Build the counter for the simulator
+        run: |
+          uv run briochette build --target ios --ios sim \
+            --project examples/counter --host host/briochette_host --out "$RUNNER_TEMP/ios"
+      # idb-companion compiles only with Xcode 26, which the image carries
+      # beside its default; the app is built and run with the default.
+      - name: idb, to tap the simulator
+        run: |
+          default=$(xcode-select -p)
+          xcode26=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$xcode26" ] || { echo "no Xcode 26 on this image"; ls -d /Applications/Xcode*; exit 1; }
+          sudo xcode-select -s "$xcode26"
+          brew install facebook/fb/idb-companion
+          sudo xcode-select -s "$default"
+          pipx install fb-idb
+      - name: Run on the simulator
+        timeout-minutes: 20
+        run: scripts/ios-smoke.sh "$RUNNER_TEMP/ios/Counter.app" com.example.counter ios-smoke
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-smoke
+          path: ios-smoke

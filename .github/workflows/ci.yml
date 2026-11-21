@@ -38,7 +38,9 @@ jobs:
         working-directory: host
         shell: bash
     steps:
+      # Before checkout `host/` does not exist yet.
       - run: git config --global core.autocrlf false
+        working-directory: .
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         id: python
@@ -91,6 +93,6 @@ jobs:
         working-directory: host
         env:
           PYO3_PYTHON: ${{ steps.python.outputs.python-path }}
-      - run: xvfb-run -a uv run pytest examples/counter/e2e
+      - run: xvfb-run -a uv run pytest examples/counter/e2e examples/todo/e2e examples/gallery/e2e
         env:
           BRIOCHETTE_HOST: ${{ github.workspace }}/host/target/debug/briochette_host

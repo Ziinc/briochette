@@ -33,6 +33,17 @@ pub fn candidates(
         .collect()
 }
 
+/// The Python the app ships, if it ships one: `python/` (holding
+/// `lib/python3.X`) in the app itself (Android, desktop bundles), else in the
+/// first of `places` that has one (on iOS CPython's Xcode step puts it at
+/// the bundle's root, beside the executable).
+pub fn python_home(root: &Path, places: &[Option<&Path>]) -> Option<PathBuf> {
+    std::iter::once(root)
+        .chain(places.iter().flatten().copied())
+        .map(|dir| dir.join("python"))
+        .find(|home| home.join("lib").is_dir())
+}
+
 /// The first of `candidates` that holds an app (`app.json`).
 pub fn find_app(candidates: &[PathBuf]) -> Option<PathBuf> {
     candidates
@@ -60,8 +71,10 @@ pub fn entry_point(root: &Path) -> Result<(String, String), String> {
     }
 }
 
-/// Starts the app at `root` on a new `python` thread. One app per process.
-pub fn start(root: PathBuf, api: &'static HostApi) -> Result<(), String> {
+/// Starts the app at `root` on a new `python` thread, with the Python at
+/// `home` if given (else the one this library was linked against). One app
+/// per process.
+pub fn start(root: PathBuf, home: Option<PathBuf>, api: &'static HostApi) -> Result<(), String> {
     if api.abi_version != ABI_VERSION {
         return Err(format!(
             "the host speaks ABI {} and briochette ABI {ABI_VERSION}; rebuild the app",
@@ -73,36 +86,82 @@ pub fn start(root: PathBuf, api: &'static HostApi) -> Result<(), String> {
         .map_err(|_| "an app is already running in this process")?;
     std::thread::Builder::new()
         .name("python".into())
-        .spawn(move || run(&root, entry))
+        .spawn(move || run(&root, home, entry))
         .map_err(|e| e.to_string())?;
     Ok(())
 }
 
-fn run(root: &Path, (module, function): (String, String)) {
+fn run(root: &Path, home: Option<PathBuf>, (module, function): (String, String)) {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
+        // In the device log: without its stdlib CPython aborts before Python
+        // can say why.
+        eprintln!("briochette: python home {home:?}");
+        if let Some(home) = home {
+            // SAFETY: before the interpreter starts, and the only thread
+            // that reads the environment for it is this one.
+            unsafe { std::env::set_var("PYTHONHOME", home) };
+        }
         pyo3::append_to_inittab!(_briochette);
         Python::initialize();
     });
     Python::attach(|py| {
         let result = (|| -> PyResult<()> {
+            let sys = py.import("sys")?;
+            // The process's arguments, as `QApplication(sys.argv)` reads them.
+            sys.setattr("argv", std::env::args().collect::<Vec<_>>())?;
             // A site dir, so its `.pth` files (editable installs) count too.
             // Strings: the import system skips any other kind of entry.
             let site_packages = root.join("site-packages");
             py.import("site")?
                 .call_method1("addsitedir", (site_packages.to_string_lossy(),))?;
-            let path = py.import("sys")?.getattr("path")?.cast_into::<PyList>()?;
+            let path = sys.getattr("path")?.cast_into::<PyList>()?;
             path.insert(0, root.to_string_lossy())?;
             py.import(module.as_str())?
                 .getattr(function.as_str())?
                 .call0()?;
             Ok(())
         })();
-        if let Err(err) = result {
-            err.print(py);
-            notice(&format!("The app stopped: {err}"));
+        // As a Python program, the app ends when its main function does.
+        let code = match result {
+            Ok(()) => Some(0),
+            Err(err) if err.is_instance_of::<pyo3::exceptions::PySystemExit>(py) => {
+                Some(exit_code(py, &err))
+            }
+            Err(err) => {
+                // Shown in place of the app; the process stays to show it.
+                err.print(py);
+                notice(&format!("The app stopped: {err}"));
+                None
+            }
+        };
+        if let Some(code) = code {
+            call_json(&serde_json::json!({"call": "app.exit", "ref": 0, "args": {"code": code}}));
         }
     });
+}
+
+/// `sys.exit`'s status: an int as is, None as 0, anything else printed and 1.
+fn exit_code(py: Python<'_>, err: &PyErr) -> i64 {
+    let code = err.value(py).getattr("code").ok();
+    match code {
+        Some(code) if code.is_none() => 0,
+        Some(code) => code.extract::<i64>().unwrap_or_else(|_| {
+            let _ = py
+                .import("sys")
+                .and_then(|sys| sys.getattr("stderr"))
+                .and_then(|stderr| stderr.call_method1("write", (format!("{code}\n"),)));
+            1
+        }),
+        None => 1,
+    }
+}
+
+fn call_json(message: &serde_json::Value) {
+    let json = message.to_string();
+    if let Some(api) = HOST.get() {
+        (api.call)(api.ctx, json.as_ptr(), json.len());
+    }
 }
 
 /// Replaces window 0 with `text`, so a failed start is not a blank window.
@@ -216,6 +275,32 @@ mod tests {
         ];
         assert_eq!(found, expected);
         assert_eq!(candidates(None, None, None), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn python_home_is_the_apps_or_the_bundles_python() {
+        let (app, bundle, exe) = (
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+            tempfile::tempdir().unwrap(),
+        );
+        let places = [Some(bundle.path()), Some(exe.path())];
+        assert_eq!(python_home(app.path(), &places), None);
+        std::fs::create_dir_all(exe.path().join("python/lib")).unwrap();
+        assert_eq!(
+            python_home(app.path(), &places),
+            Some(exe.path().join("python"))
+        );
+        std::fs::create_dir_all(bundle.path().join("python/lib")).unwrap();
+        assert_eq!(
+            python_home(app.path(), &places),
+            Some(bundle.path().join("python"))
+        );
+        std::fs::create_dir_all(app.path().join("python/lib")).unwrap();
+        assert_eq!(
+            python_home(app.path(), &[None]),
+            Some(app.path().join("python"))
+        );
     }
 
     #[test]
