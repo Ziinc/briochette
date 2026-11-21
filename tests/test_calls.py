@@ -47,6 +47,47 @@ def test_calls_briochette_makes_are_in_levains_vocabulary(qtbot, qapp):
         assert set(call["args"]) <= KNOWN[call["call"]], call
 
 
+def test_desktop_calls_are_in_levains_vocabulary(qtbot):
+    from briochette.core import QStandardPaths, Qt, QUrl
+    from briochette.gui import QDesktopServices, QIcon
+    from briochette.widgets import QFileDialog, QMenu, QMessageBox, QSystemTrayIcon
+
+    start = len(qtbot.host.calls)
+    w = QWidget()
+    qtbot.addWidget(w)
+    w.showMaximized()
+    w.showMinimized()
+    w.showNormal()
+    w.showFullScreen()
+    w.activateWindow()
+    w.setMinimumSize(10, 10)
+    w.resize(100, 100)
+    w.move(1, 2)
+    w.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    QMessageBox.information(w, "t", "m")
+    QMessageBox.question(w, "t", "m")
+    QFileDialog.getOpenFileName(w, "t", "/home", "Images (*.png)")
+    QFileDialog.getOpenFileNames(w, "t")
+    QFileDialog.getExistingDirectory(w, "t", "/home")
+    QFileDialog.getSaveFileName(w, "t", "/home/a.csv", "CSV (*.csv)")
+    QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppDataLocation)
+    QDesktopServices.openUrl(QUrl("https://example.com"))
+    menu = QMenu(w)
+    menu.addAction("Copy")
+    menu.exec()
+    tray = QSystemTrayIcon(QIcon("/tmp/i.png"))
+    tray.setToolTip("t")
+    tray.setContextMenu(menu)
+    tray.show()
+    tray.showMessage("t", "m")
+    tray.hide()
+
+    made = qtbot.host.calls[start:]
+    for call in made:
+        assert call["call"] in KNOWN, call
+        assert set(call["args"]) <= KNOWN[call["call"]], call
+
+
 def test_headless_host_refuses_unknown_calls_as_levain_does(qtbot):
     unknown = next(c for c in FIXTURES if c["name"] == "unknown call")
     replies = []

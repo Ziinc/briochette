@@ -1,11 +1,24 @@
-"""Key sequences, shortcuts, actions and the clipboard."""
+"""Key sequences, shortcuts, actions, the clipboard, images, URLs and the
+events windows get."""
 
 import itertools
 import sys
 
 from briochette.core import QObject, Qt, _app, pyqtSignal
 
-__all__ = ["QKeySequence", "QShortcut", "QAction", "QClipboard"]
+__all__ = [
+    "QKeySequence",
+    "QShortcut",
+    "QAction",
+    "QClipboard",
+    "QIcon",
+    "QPixmap",
+    "QDesktopServices",
+    "QCloseEvent",
+    "QResizeEvent",
+    "QMoveEvent",
+    "QDropEvent",
+]
 
 _ids = itertools.count()
 
@@ -173,3 +186,101 @@ class QClipboard(QObject):
 
     def setText(self, text):
         _app()._call("clipboard.write", {"text": text})
+
+
+class QPixmap:
+    """An image file, shown by a label (``<img>`` in the host)."""
+
+    def __init__(self, path=""):
+        self._path = str(path)
+
+    def isNull(self):
+        return not self._path
+
+    def _src(self):
+        return self._path
+
+
+class QIcon:
+    """An icon from an image file."""
+
+    def __init__(self, path=""):
+        self._path = path._path if isinstance(path, (QIcon, QPixmap)) else str(path)
+
+    def isNull(self):
+        return not self._path
+
+
+class QDesktopServices:
+    @staticmethod
+    def openUrl(url):
+        """Opens `url` with the system's handler (a browser, for web URLs)."""
+        text = url.toString() if hasattr(url, "toString") else str(url)
+        _app()._call("app.open_url", {"url": text})
+        return True
+
+
+class _Event:
+    def __init__(self):
+        self._accepted = True
+
+    def accept(self):
+        self._accepted = True
+
+    def ignore(self):
+        self._accepted = False
+
+    def isAccepted(self):
+        return self._accepted
+
+    def setAccepted(self, accepted):
+        self._accepted = accepted
+
+
+class QCloseEvent(_Event):
+    pass
+
+
+class QResizeEvent(_Event):
+    def __init__(self, size, old_size):
+        super().__init__()
+        self._size, self._old = size, old_size
+
+    def size(self):
+        return self._size
+
+    def oldSize(self):
+        return self._old
+
+
+class QMoveEvent(_Event):
+    def __init__(self, pos, old_pos):
+        super().__init__()
+        self._pos, self._old = pos, old_pos
+
+    def pos(self):
+        return self._pos
+
+    def oldPos(self):
+        return self._old
+
+
+class QDropEvent(_Event):
+    """Files dropped on a window that accepts drops."""
+
+    def __init__(self, pos, mime_data):
+        super().__init__()
+        self._pos, self._mime = pos, mime_data
+        self._accepted = False
+
+    def mimeData(self):
+        return self._mime
+
+    def position(self):
+        return self._pos
+
+    def pos(self):
+        return self._pos
+
+    def acceptProposedAction(self):
+        self.accept()

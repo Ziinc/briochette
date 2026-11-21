@@ -1,6 +1,7 @@
 """Widgets. Each widget owns one host node; setters patch only that node."""
 
 import asyncio
+import enum
 import itertools
 import json
 import queue
@@ -8,7 +9,16 @@ import threading
 import weakref
 
 from briochette import _native
-from briochette.core import QModelIndex, QObject, Qt, pyqtSignal
+from briochette.core import (
+    QMimeData,
+    QModelIndex,
+    QObject,
+    QPoint,
+    QSize,
+    Qt,
+    QUrl,
+    pyqtSignal,
+)
 
 __all__ = [
     "QApplication",
@@ -26,6 +36,9 @@ __all__ = [
     "QMenuBar",
     "QMenu",
     "QListView",
+    "QMessageBox",
+    "QFileDialog",
+    "QSystemTrayIcon",
 ]
 
 _ids = itertools.count()
@@ -37,6 +50,7 @@ class QApplication(QObject):
     """Owns the host connection, the open windows and the event loop."""
 
     _instance = None
+    applicationStateChanged = pyqtSignal(object)
 
     def __init__(self, argv=None, host=None):
         super().__init__()
@@ -63,6 +77,8 @@ class QApplication(QObject):
         self._thread = threading.get_ident()
         self._loop = asyncio.new_event_loop()
         self._code = 0
+        self._state = Qt.ApplicationState.ApplicationActive
+        self._trays = weakref.WeakSet()
         # Host events arrive on another thread; the loop drains them in order.
         self._inbox = queue.SimpleQueue()
         if hasattr(self._host, "set_event_handler"):
@@ -95,6 +111,9 @@ class QApplication(QObject):
         if not self._loop.is_running():
             self._loop.run_until_complete(asyncio.sleep(seconds))
         self.flush()
+
+    def applicationState(self):
+        return self._state
 
     @staticmethod
     def clipboard():
@@ -184,7 +203,8 @@ class QApplication(QObject):
         return ref
 
     def _call_sync(self, name, args, timeout=5):
-        """A platform call, waiting for its reply while handling other events."""
+        """A platform call, waiting for its reply while handling other events.
+        `timeout` None waits as long as it takes (a dialog the user answers)."""
         if self._host is None:
             return None
         ref = self._call(name, args)
@@ -254,6 +274,11 @@ class QApplication(QObject):
             case "menu":
                 if action := self._actions.get(event.get("event")):
                     action.trigger()
+            case "window":
+                self._on_window(event)
+            case "tray":
+                for tray in list(self._trays):
+                    tray._on_host(event.get("event"))
             case "reply":
                 if event.get("ref") in self._awaiting:
                     self._awaiting[event["ref"]] = event
@@ -263,6 +288,22 @@ class QApplication(QObject):
                 if window in self._roots:
                     self._pending.pop(window, None)
                     self._render(window, self._frame(window))
+
+
+    def _on_window(self, event):
+        match event.get("event"):
+            case "suspended":
+                self._set_state(Qt.ApplicationState.ApplicationSuspended)
+            case "resumed":
+                self._set_state(Qt.ApplicationState.ApplicationActive)
+            case _:
+                if root := self._roots.get(event.get("window")):
+                    root._on_window(event)
+
+    def _set_state(self, state):
+        if state != self._state:
+            self._state = state
+            self.applicationStateChanged.emit(state)
 
 
 def _app():
@@ -287,6 +328,9 @@ class QWidget(QObject):
         self._hidden = False
         # Set by the layout the widget is in, such as "flex-1" for a stretch.
         self._item_class = None
+        self._size = QSize()
+        self._pos = QPoint()
+        self._accept_drops = False
 
     # Qt API
 
@@ -356,6 +400,9 @@ class QWidget(QObject):
         if self.isWindow():
             if visible and self._window is None:
                 self._window = _app()._open(self)
+                if type(self).closeEvent is not QWidget.closeEvent:
+                    # The window asks before closing: `closeEvent` decides.
+                    self._window_call("window.prevent_close", on=True)
             elif not visible:
                 self.close()
         elif self._hidden == visible:
@@ -375,6 +422,117 @@ class QWidget(QObject):
             _app()._close(self._window)
             self._window = None
         return True
+
+    # Window geometry and state (top-level widgets)
+
+    def size(self):
+        return self._size
+
+    def width(self):
+        return self._size.width()
+
+    def height(self):
+        return self._size.height()
+
+    def pos(self):
+        return self._pos
+
+    def x(self):
+        return self._pos.x()
+
+    def y(self):
+        return self._pos.y()
+
+    def resize(self, width, height=None):
+        if isinstance(width, QSize):
+            width, height = width.width(), width.height()
+        self._window_call("window.set_bounds", width=width, height=height)
+
+    def move(self, x, y=None):
+        if isinstance(x, QPoint):
+            x, y = x.x(), x.y()
+        self._window_call("window.set_bounds", x=x, y=y)
+
+    def setMinimumSize(self, width, height=None):
+        if isinstance(width, QSize):
+            width, height = width.width(), width.height()
+        self._window_call("window.set_min_size", width=width, height=height)
+
+    def showMaximized(self):
+        self.show()
+        self._window_call("window.maximize")
+
+    def showMinimized(self):
+        self.show()
+        self._window_call("window.minimize")
+
+    def showNormal(self):
+        self.show()
+        self._window_call("window.unmaximize")
+
+    def showFullScreen(self):
+        self.show()
+        self._window_call("window.set_fullscreen", on=True)
+
+    def activateWindow(self):
+        self._window_call("window.focus")
+
+    def raise_(self):
+        self.activateWindow()
+
+    def setWindowFlag(self, flag, on=True):
+        if flag & Qt.WindowType.WindowStaysOnTopHint:
+            self._window_call("window.set_always_on_top", on=on)
+
+    def setAcceptDrops(self, on):
+        self._accept_drops = on
+
+    def acceptDrops(self):
+        return self._accept_drops
+
+    # Event handlers, for subclasses to override
+
+    def closeEvent(self, event):
+        event.accept()
+
+    def resizeEvent(self, event):
+        pass
+
+    def moveEvent(self, event):
+        pass
+
+    def dropEvent(self, event):
+        pass
+
+    def _window_call(self, name, **args):
+        if self._window is not None:
+            _app()._call(name, {"window": self._window, **args})
+
+    def _on_window(self, event):
+        """A host event about this widget's window."""
+        from briochette.gui import QCloseEvent, QDropEvent, QMoveEvent, QResizeEvent
+
+        match event.get("event"):
+            case "close-requested":
+                close = QCloseEvent()
+                self.closeEvent(close)
+                if close.isAccepted():
+                    self.close()
+            case "closed":
+                # The user closed it: the host already has.
+                app = _app()
+                app._roots.pop(self._window, None)
+                app._pending.pop(self._window, None)
+                self._window = None
+            case "resized":
+                old, self._size = self._size, QSize(event["width"], event["height"])
+                self.resizeEvent(QResizeEvent(self._size, old))
+            case "moved":
+                old, self._pos = self._pos, QPoint(event["x"], event["y"])
+                self.moveEvent(QMoveEvent(self._pos, old))
+            case "drop" if self._accept_drops:
+                urls = [QUrl.fromLocalFile(p) for p in event.get("paths", [])]
+                self.dropEvent(QDropEvent(QPoint(event.get("x", 0), event.get("y", 0)), QMimeData(urls)))
 
     # Rendering
 
@@ -623,6 +781,28 @@ class _Text(QWidget):
 class QLabel(_Text):
     _tag = "text"
 
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._pixmap = None
+
+    def setPixmap(self, pixmap):
+        self._pixmap = pixmap
+        self._refresh()
+
+    def pixmap(self):
+        from briochette.gui import QPixmap
+
+        return self._pixmap or QPixmap()
+
+    def setText(self, text):
+        self._pixmap = None
+        super().setText(text)
+
+    def _node(self):
+        if self._pixmap is not None and not self._pixmap.isNull() and not self._hidden:
+            return {"t": "img", "a": {**self._attrs(), "src": self._pixmap._src()}, "c": []}
+        return super()._node()
+
 
 class QPushButton(_Text):
     _tag = "button"
@@ -856,6 +1036,9 @@ class QMenuBar(QWidget):
 
 class QMenu(QWidget):
     def __init__(self, title="", parent=None):
+        if isinstance(title, QWidget):
+            # QMenu(parent), as Qt also takes it.
+            title, parent = "", title
         super().__init__(parent)
         self._title = title
         self._items = []
@@ -879,8 +1062,20 @@ class QMenu(QWidget):
         _app()._menus_changed()
 
     def _spec(self):
-        items = [{"separator": True} if a is None else a._spec() for a in self._items]
-        return {"title": self._title.replace("&", ""), "items": items}
+        return {"title": self._title.replace("&", ""), "items": self._item_specs()}
+
+    def _item_specs(self):
+        return [{"separator": True} if a is None else a._spec() for a in self._items]
+
+    def exec(self, pos=None, at=None):
+        """Shows the menu at the pointer, as a context menu. Its actions'
+        `triggered` fire when chosen; this returns at once."""
+        parent = self._parent
+        window = parent.winId() if isinstance(parent, QWidget) else None
+        _app()._call("menu.popup", {"window": window or 0, "items": self._item_specs()})
+
+    def popup(self, pos=None, at=None):
+        self.exec(pos, at)
 
 
 class QListView(QWidget):
@@ -972,3 +1167,213 @@ class QListView(QWidget):
             if index.isValid():
                 self.setCurrentIndex(index)
                 self.clicked.emit(index)
+
+
+def _filters(text):
+    """Qt's name filters (``"Images (*.png *.jpg);;All files (*)"``) as the
+    host's dialog filters."""
+    import re
+
+    filters = []
+    for part in filter(None, (p.strip() for p in (text or "").split(";;"))):
+        match = re.fullmatch(r"(.*?)\s*\(([^)]*)\)", part)
+        name, patterns = (match.group(1), match.group(2)) if match else (part, part)
+        extensions = [p.strip().removeprefix("*.").removeprefix("*") or "*" for p in patterns.split()]
+        filters.append({"name": name or part, "extensions": extensions})
+    return filters
+
+
+def _first_filter(text):
+    parts = [p.strip() for p in (text or "").split(";;") if p.strip()]
+    return parts[0] if parts else ""
+
+
+class QMessageBox(QWidget):
+    """Native message and question dialogs."""
+
+    class StandardButton(enum.IntFlag):
+        NoButton = 0
+        Ok = 0x00000400
+        Save = 0x00000800
+        Open = 0x00002000
+        Yes = 0x00004000
+        No = 0x00010000
+        Abort = 0x00040000
+        Retry = 0x00080000
+        Ignore = 0x00100000
+        Close = 0x00200000
+        Cancel = 0x00400000
+        Discard = 0x00800000
+
+    class Icon(enum.Enum):
+        NoIcon = 0
+        Information = 1
+        Warning = 2
+        Critical = 3
+        Question = 4
+
+    @staticmethod
+    def _message(title, text, kind):
+        _app()._call_sync("dialog.message", {"title": title, "message": text, "kind": kind}, timeout=None)
+        return QMessageBox.StandardButton.Ok
+
+    @staticmethod
+    def information(parent, title, text, buttons=None, default=None):
+        return QMessageBox._message(title, text, "info")
+
+    @staticmethod
+    def warning(parent, title, text, buttons=None, default=None):
+        return QMessageBox._message(title, text, "warning")
+
+    @staticmethod
+    def critical(parent, title, text, buttons=None, default=None):
+        return QMessageBox._message(title, text, "error")
+
+    @staticmethod
+    def about(parent, title, text):
+        QMessageBox._message(title, text, "info")
+
+    @staticmethod
+    def question(parent, title, text, buttons=None, default=None):
+        """Two of `buttons` (Yes and No by default): the first, as the host's
+        OK, or the second."""
+        B = QMessageBox.StandardButton
+        buttons = buttons or (B.Yes | B.No)
+        chosen = [b for b in B if b and b in buttons][:2] or [B.Yes, B.No]
+        ok, cancel = chosen[0], chosen[-1] if len(chosen) > 1 else B.Cancel
+        yes = _app()._call_sync(
+            "dialog.confirm",
+            {"title": title, "message": text, "kind": "info", "ok": ok.name, "cancel": cancel.name},
+            timeout=None,
+        )
+        return ok if yes else cancel
+
+
+class QFileDialog(QWidget):
+    """Native open and save dialogs. Each returns what Qt's does: a path
+    ("" for a cancel) and the first filter."""
+
+    @staticmethod
+    def _args(caption, directory, filter_text):
+        args = {}
+        if caption:
+            args["title"] = caption
+        if directory:
+            args["default_path"] = directory
+        if filters := _filters(filter_text):
+            args["filters"] = filters
+        return args
+
+    @staticmethod
+    def getOpenFileName(parent=None, caption="", directory="", filter="", *rest, **kw):
+        path = _app()._call_sync("dialog.open", QFileDialog._args(caption, directory, filter), timeout=None)
+        return (path, _first_filter(filter)) if path else ("", "")
+
+    @staticmethod
+    def getOpenFileNames(parent=None, caption="", directory="", filter="", *rest, **kw):
+        args = {**QFileDialog._args(caption, directory, filter), "multiple": True}
+        paths = _app()._call_sync("dialog.open", args, timeout=None) or []
+        return (list(paths), _first_filter(filter))
+
+    @staticmethod
+    def getExistingDirectory(parent=None, caption="", directory="", *rest, **kw):
+        args = {**QFileDialog._args(caption, directory, ""), "directory": True}
+        return _app()._call_sync("dialog.open", args, timeout=None) or ""
+
+    @staticmethod
+    def getSaveFileName(parent=None, caption="", directory="", filter="", *rest, **kw):
+        import os
+
+        args = QFileDialog._args(caption, os.path.dirname(directory), filter)
+        if name := os.path.basename(directory):
+            args["default_name"] = name
+        path = _app()._call_sync("dialog.save", args, timeout=None)
+        return (path, _first_filter(filter)) if path else ("", "")
+
+
+class QSystemTrayIcon(QObject):
+    """The app's icon in the system tray (desktop), with a menu and
+    notifications."""
+
+    class ActivationReason(enum.Enum):
+        Unknown = 0
+        Context = 1
+        DoubleClick = 2
+        Trigger = 3
+        MiddleClick = 4
+
+    class MessageIcon(enum.Enum):
+        NoIcon = 0
+        Information = 1
+        Warning = 2
+        Critical = 3
+
+    activated = pyqtSignal(object)
+    messageClicked = pyqtSignal()
+
+    def __init__(self, icon=None, parent=None):
+        super().__init__(parent)
+        self._icon = icon
+        self._tooltip = ""
+        self._menu = None
+        self._visible = False
+        _app()._trays.add(self)
+
+    @staticmethod
+    def isSystemTrayAvailable():
+        return True
+
+    def setIcon(self, icon):
+        self._icon = icon
+        self._changed()
+
+    def icon(self):
+        return self._icon
+
+    def setToolTip(self, tip):
+        self._tooltip = tip
+        self._changed()
+
+    def toolTip(self):
+        return self._tooltip
+
+    def setContextMenu(self, menu):
+        self._menu = menu
+        self._changed()
+
+    def contextMenu(self):
+        return self._menu
+
+    def isVisible(self):
+        return self._visible
+
+    def setVisible(self, visible):
+        self._visible = visible
+        if visible:
+            self._changed()
+        else:
+            _app()._call("tray.remove", {})
+
+    def show(self):
+        self.setVisible(True)
+
+    def hide(self):
+        self.setVisible(False)
+
+    def showMessage(self, title, message, icon=None, msecs=10000):
+        _app()._call("notification.send", {"title": title, "body": message})
+
+    def _changed(self):
+        if not self._visible:
+            return
+        spec = {"items": self._menu._item_specs() if self._menu else []}
+        if self._icon is not None and not self._icon.isNull():
+            spec["icon"] = self._icon._path
+        if self._tooltip:
+            spec["tooltip"] = self._tooltip
+        _app()._call("tray.set", spec)
+
+    def _on_host(self, event):
+        reason = {"click": self.ActivationReason.Trigger, "double-click": self.ActivationReason.DoubleClick}.get(event)
+        if reason is not None and self._visible:
+            self.activated.emit(reason)

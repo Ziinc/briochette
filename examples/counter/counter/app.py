@@ -11,8 +11,7 @@ class Counter(QWidget):
         self.increment.setAccessibleName("Increment")
         self.increment.clicked.connect(self.inc)
         layout = QVBoxLayout(self)
-        # Clear of a phone's status bar: the host has no safe-area insets yet.
-        layout.setContentsMargins(24, 72, 24, 24)
+        layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(12)
         layout.addWidget(self.label)
         layout.addWidget(self.increment)

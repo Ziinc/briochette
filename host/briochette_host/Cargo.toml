@@ -20,7 +20,7 @@ playwright = ["levain/playwright"]
 
 [dependencies]
 briochette_cpython = { path = "../briochette_cpython" }
-levain = { git = "https://github.com/Ziinc/levain", rev = "53738e5a7cfcc5d6275b2b3c79c31ca81464c5c7" }
+levain = { git = "https://github.com/Ziinc/levain", rev = "1ed1b12206213db787e8fc8cbe0ac7b86ebcbf1c" }
 # `tauri::generate_context!` names the crate; the version is levain's.
 tauri = { version = "2.12", default-features = false , features = [] }
 

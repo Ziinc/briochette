@@ -45,6 +45,26 @@ class HeadlessHost:
         self.calls = []
         self.menus = []
         self.clipboard = ""
+        self._answers = {}
+        # What `app.paths` reports.
+        self.paths = {
+            "data": "/data/app",
+            "local_data": "/data/app",
+            "config": "/config/app",
+            "cache": "/cache/app",
+            "log": "/log/app",
+            "home": "/home/ana",
+            "documents": "/home/ana/Documents",
+            "downloads": "/home/ana/Downloads",
+            "pictures": "/home/ana/Pictures",
+            "temp": "/tmp",
+            "resources": "/app/resources",
+        }
+
+    def answer(self, call, result):
+        """Answers the next `call` (such as ``dialog.confirm``) with `result`,
+        as if the user had."""
+        self._answers.setdefault(call, []).append(result)
 
     def render(self, window, frame):
         self._frames.setdefault(window, []).append(frame)
@@ -76,7 +96,19 @@ class HeadlessHost:
                 self.menus = args["menus"]
             case "window.close":
                 self._trees.pop(args["window"], None)
-            case "window.open" | "window.set_title" | "window.set_bounds" | "app.exit":
+            case "app.paths":
+                result = dict(self.paths)
+            case "app.info":
+                result = {"os": "linux", "arch": "x86_64", "family": "unix", "locale": "en-US",
+                          "name": "app", "version": "0.1.0", "identifier": "com.example.app"}
+            case "dialog.confirm" | "dialog.message" | "dialog.open" | "dialog.save":
+                answers = self._answers.get(name) or [True if name == "dialog.confirm" else None]
+                result = answers.pop(0)
+            case _ if name.startswith(("window.", "notification.", "tray.", "menu.", "shortcut.")) or name in (
+                "app.exit",
+                "app.open_url",
+                "app.restart",
+            ):
                 pass
             case _:
                 error = f"{name}: no platform call `{name}`"

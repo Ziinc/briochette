@@ -20,6 +20,11 @@ __all__ = [
     "Signal",
     "Slot",
     "Property",
+    "QSize",
+    "QPoint",
+    "QUrl",
+    "QMimeData",
+    "QStandardPaths",
 ]
 
 
@@ -51,6 +56,17 @@ class Qt:
         ControlModifier = 0x04000000
         AltModifier = 0x08000000
         MetaModifier = 0x10000000
+
+    class WindowType(enum.Flag):
+        Widget = 0
+        Window = 0x1
+        WindowStaysOnTopHint = 0x00040000
+
+    class ApplicationState(enum.Enum):
+        ApplicationSuspended = 0
+        ApplicationHidden = 1
+        ApplicationInactive = 2
+        ApplicationActive = 4
 
     Key = enum.IntEnum(
         "Key",
@@ -433,3 +449,160 @@ class QStringListModel(QAbstractListModel):
         self.beginResetModel()
         self._strings = list(strings)
         self.endResetModel()
+
+
+class QSize:
+    """A width and a height; (-1, -1) is invalid."""
+
+    def __init__(self, width=-1, height=-1):
+        self._w, self._h = int(width), int(height)
+
+    def width(self):
+        return self._w
+
+    def height(self):
+        return self._h
+
+    def isValid(self):
+        return self._w >= 0 and self._h >= 0
+
+    def __eq__(self, other):
+        return isinstance(other, QSize) and (self._w, self._h) == (other._w, other._h)
+
+    def __hash__(self):
+        return hash((self._w, self._h))
+
+    def __repr__(self):
+        return f"QSize({self._w}, {self._h})"
+
+
+class QPoint:
+    def __init__(self, x=0, y=0):
+        self._x, self._y = int(x), int(y)
+
+    def x(self):
+        return self._x
+
+    def y(self):
+        return self._y
+
+    def __eq__(self, other):
+        return isinstance(other, QPoint) and (self._x, self._y) == (other._x, other._y)
+
+    def __hash__(self):
+        return hash((self._x, self._y))
+
+    def __repr__(self):
+        return f"QPoint({self._x}, {self._y})"
+
+
+class QUrl:
+    """A URL; local files are ``file://`` URLs."""
+
+    def __init__(self, url=""):
+        self._url = url.toString() if isinstance(url, QUrl) else str(url)
+
+    @staticmethod
+    def fromLocalFile(path):
+        from urllib.parse import quote
+
+        return QUrl("file://" + quote(str(path)))
+
+    def toString(self):
+        return self._url
+
+    def isLocalFile(self):
+        return self._url.startswith("file://")
+
+    def toLocalFile(self):
+        from urllib.parse import unquote
+
+        return unquote(self._url.removeprefix("file://")) if self.isLocalFile() else ""
+
+    def scheme(self):
+        return self._url.split(":", 1)[0] if ":" in self._url else ""
+
+    def isValid(self):
+        return bool(self._url)
+
+    def __eq__(self, other):
+        return isinstance(other, QUrl) and other._url == self._url
+
+    def __hash__(self):
+        return hash(self._url)
+
+    def __repr__(self):
+        return f"QUrl({self._url!r})"
+
+
+class QMimeData(QObject):
+    """What a drop carries: here, the files' URLs."""
+
+    def __init__(self, urls=()):
+        super().__init__()
+        self._urls = list(urls)
+
+    def hasUrls(self):
+        return bool(self._urls)
+
+    def urls(self):
+        return list(self._urls)
+
+    def setUrls(self, urls):
+        self._urls = list(urls)
+
+
+# `app.paths`'s key for each location the host knows.
+_PATH_KEYS = {
+    "DocumentsLocation": "documents",
+    "PicturesLocation": "pictures",
+    "TempLocation": "temp",
+    "HomeLocation": "home",
+    "AppLocalDataLocation": "local_data",
+    "CacheLocation": "cache",
+    "ConfigLocation": "config",
+    "DownloadLocation": "downloads",
+    "AppDataLocation": "data",
+    "AppConfigLocation": "config",
+}
+
+
+class QStandardPaths:
+    """Where the app keeps its files, and the user's folders, as the host
+    reports them (``app.paths``)."""
+
+    class StandardLocation(enum.Enum):
+        DesktopLocation = 0
+        DocumentsLocation = 1
+        FontsLocation = 2
+        ApplicationsLocation = 3
+        MusicLocation = 4
+        MoviesLocation = 5
+        PicturesLocation = 6
+        TempLocation = 7
+        HomeLocation = 8
+        AppLocalDataLocation = 9
+        CacheLocation = 10
+        GenericDataLocation = 11
+        RuntimeLocation = 12
+        ConfigLocation = 13
+        DownloadLocation = 14
+        GenericCacheLocation = 15
+        GenericConfigLocation = 16
+        AppDataLocation = 17
+        AppConfigLocation = 18
+
+
+    @staticmethod
+    def writableLocation(location):
+        """The folder's path, or "" where the host has none."""
+        key = _PATH_KEYS.get(location.name)
+        app = _app()
+        if key is None or app is None:
+            return ""
+        return (app._call_sync("app.paths", {}) or {}).get(key) or ""
+
+    @staticmethod
+    def standardLocations(location):
+        path = QStandardPaths.writableLocation(location)
+        return [path] if path else []

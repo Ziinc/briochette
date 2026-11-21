@@ -11,7 +11,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   NDK_VERSION: 27.2.12479018
-  LEVAIN_REV: 53738e5a7cfcc5d6275b2b3c79c31ca81464c5c7
+  LEVAIN_REV: 1ed1b12206213db787e8fc8cbe0ac7b86ebcbf1c
 
 jobs:
   android:
